@@ -225,6 +225,7 @@ dependencies = [
  "ansi_term",
  "atty",
  "camino",
+ "cfg-if",
  "clap",
  "cradle",
  "ctrlc",

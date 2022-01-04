@@ -9,8 +9,15 @@ pub(crate) const CHOOSE_HELP: &str = "Select one or more recipes to run using a 
                                       `--chooser` is not passed the chooser defaults to the value \
                                       of $JUST_CHOOSER, falling back to `fzf`";
 
-pub(crate) const DEFAULT_SHELL: &str = "sh";
-pub(crate) const DEFAULT_SHELL_ARG: &str = "-cu";
+cfg_if::cfg_if! {
+  if #[cfg(target_family = "windows")] {
+    pub(crate) const DEFAULT_SHELL: &str = "powershell.exe";
+    pub(crate) const DEFAULT_SHELL_ARG: &str = "-command";
+  } else {
+    pub(crate) const DEFAULT_SHELL: &str = "sh";
+    pub(crate) const DEFAULT_SHELL_ARG: &str = "-cu";
+  }
+}
 
 #[derive(Debug, PartialEq)]
 pub(crate) struct Config {
