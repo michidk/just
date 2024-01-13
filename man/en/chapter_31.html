@@ -272,6 +272,17 @@ current <code>justfile</code>.</p>
 <pre><code class="language-sh">$ just
 The executable is at: /bin/just
 </code></pre>
+<h4 id="just-process-id"><a class="header" href="#just-process-id">Just Process ID</a></h4>
+<ul>
+<li><code>just_pid()</code> - Process ID of the <code>just</code> executable.</li>
+</ul>
+<p>For example:</p>
+<pre><code class="language-just">pid:
+  @echo The process ID is: {{ just_pid() }}
+</code></pre>
+<pre><code class="language-sh">$ just
+The process ID is: 420
+</code></pre>
 <h4 id="string-manipulation"><a class="header" href="#string-manipulation">String Manipulation</a></h4>
 <ul>
 <li><code>quote(s)</code> - Replace all single quotes with <code>'\''</code> and prepend and append
@@ -361,6 +372,22 @@ hexadecimal string.</li>
 <a href="https://semver.org">semantic <code>version</code></a>, e.g., <code>&quot;0.1.0&quot;</code> matches a
 <code>requirement</code>, e.g., <code>&quot;&gt;=0.1.0&quot;</code>, returning <code>&quot;true&quot;</code> if so and <code>&quot;false&quot;</code>
 otherwise.</li>
+</ul>
+<h5 id="xdg-directories1230"><a class="header" href="#xdg-directories1230">XDG Directories<sup>1.23.0</sup></a></h5>
+<p>These functions return paths to user-specific directories for things like
+configuration, data, caches, executables, and the user’s home directory. These
+functions follow the
+<a href="https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html">XDG Base Directory Specification</a>,
+and are implemented with the
+<a href="https://docs.rs/dirs/latest/dirs/index.html"><code>dirs</code></a> crate.</p>
+<ul>
+<li><code>cache_directory()</code> - The user-specific cache directory.</li>
+<li><code>config_directory()</code> - The user-specific configuration directory.</li>
+<li><code>config_local_directory()</code> - The local user-specific configuration directory.</li>
+<li><code>data_directory()</code> - The user-specific data directory.</li>
+<li><code>data_local_directory()</code> - The local user-specific data directory.</li>
+<li><code>executable_directory()</code> - The user-specific executable directory.</li>
+<li><code>home_directory()</code> - The user’s home directory.</li>
 </ul>
 
                     </main>

@@ -1162,6 +1162,17 @@ current <code>justfile</code>.</p>
 <pre><code class="language-sh">$ just
 The executable is at: /bin/just
 </code></pre>
+<h4 id="just-process-id"><a class="header" href="#just-process-id">Just Process ID</a></h4>
+<ul>
+<li><code>just_pid()</code> - Process ID of the <code>just</code> executable.</li>
+</ul>
+<p>For example:</p>
+<pre><code class="language-just">pid:
+  @echo The process ID is: {{ just_pid() }}
+</code></pre>
+<pre><code class="language-sh">$ just
+The process ID is: 420
+</code></pre>
 <h4 id="string-manipulation"><a class="header" href="#string-manipulation">String Manipulation</a></h4>
 <ul>
 <li><code>quote(s)</code> - Replace all single quotes with <code>'\''</code> and prepend and append
@@ -1252,14 +1263,32 @@ hexadecimal string.</li>
 <code>requirement</code>, e.g., <code>&quot;&gt;=0.1.0&quot;</code>, returning <code>&quot;true&quot;</code> if so and <code>&quot;false&quot;</code>
 otherwise.</li>
 </ul>
+<h5 id="xdg-directories1230"><a class="header" href="#xdg-directories1230">XDG Directories<sup>1.23.0</sup></a></h5>
+<p>These functions return paths to user-specific directories for things like
+configuration, data, caches, executables, and the user’s home directory. These
+functions follow the
+<a href="https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html">XDG Base Directory Specification</a>,
+and are implemented with the
+<a href="https://docs.rs/dirs/latest/dirs/index.html"><code>dirs</code></a> crate.</p>
+<ul>
+<li><code>cache_directory()</code> - The user-specific cache directory.</li>
+<li><code>config_directory()</code> - The user-specific configuration directory.</li>
+<li><code>config_local_directory()</code> - The local user-specific configuration directory.</li>
+<li><code>data_directory()</code> - The user-specific data directory.</li>
+<li><code>data_local_directory()</code> - The local user-specific data directory.</li>
+<li><code>executable_directory()</code> - The user-specific executable directory.</li>
+<li><code>home_directory()</code> - The user’s home directory.</li>
+</ul>
 <div style="break-before: page; page-break-before: always;"></div><h3 id="recipe-attributes"><a class="header" href="#recipe-attributes">Recipe Attributes</a></h3>
 <p>Recipes may be annotated with attributes that change their behavior.</p>
 <div class="table-wrapper"><table><thead><tr><th>Name</th><th>Description</th></tr></thead><tbody>
 <tr><td><code>[confirm]</code><sup>1.17.0</sup></td><td>Require confirmation prior to executing recipe.</td></tr>
+<tr><td><code>[confirm(&quot;prompt&quot;)]</code><sup>1.23.0</sup></td><td>Require confirmation prior to executing recipe with a custom prompt.</td></tr>
 <tr><td><code>[linux]</code><sup>1.8.0</sup></td><td>Enable recipe on Linux.</td></tr>
 <tr><td><code>[macos]</code><sup>1.8.0</sup></td><td>Enable recipe on MacOS.</td></tr>
 <tr><td><code>[no-cd]</code><sup>1.9.0</sup></td><td>Don’t change directory before executing recipe.</td></tr>
 <tr><td><code>[no-exit-message]</code><sup>1.7.0</sup></td><td>Don’t print an error message if recipe fails.</td></tr>
+<tr><td><code>[no-quiet]</code><sup>1.23.0</sup></td><td>Override globally quiet recipes and always echo out the recipe.</td></tr>
 <tr><td><code>[private]</code><sup>1.10.0</sup></td><td>See <a href="chapter_49.html">Private Recipes</a>.</td></tr>
 <tr><td><code>[unix]</code><sup>1.8.0</sup></td><td>Enable recipe on Unixes. (Includes MacOS).</td></tr>
 <tr><td><code>[windows]</code><sup>1.8.0</sup></td><td>Enable recipe on Windows.</td></tr>
@@ -1320,6 +1349,12 @@ relied upon recipe is not confirmed, as well as recipes passed after any recipe
 that requires confirmation.</p>
 <pre><code class="language-just">[confirm]
 delete all:
+  rm -rf *
+</code></pre>
+<h4 id="custom-confirmation-prompt1230"><a class="header" href="#custom-confirmation-prompt1230">Custom Confirmation Prompt<sup>1.23.0</sup></a></h4>
+<p>The default confirmation prompt can be overridden with <code>[confirm(PROMPT)]</code>:</p>
+<pre><code class="language-just">[confirm(&quot;Are you sure you want to delete everything?&quot;)]
+delete-everything:
   rm -rf *
 </code></pre>
 <div style="break-before: page; page-break-before: always;"></div><h3 id="command-evaluation-using-backticks"><a class="header" href="#command-evaluation-using-backticks">Command Evaluation Using Backticks</a></h3>
@@ -2007,6 +2042,25 @@ line:</p>
 hello
 goodbye
 # all done!
+</code></pre>
+<p>All recipes in a Justfile can be made quiet with <code>set quiet</code>:</p>
+<pre><code class="language-just">set quiet
+
+foo:
+  echo &quot;This is quiet&quot;
+
+@foo2:
+  echo &quot;This is also quiet&quot;
+</code></pre>
+<p>The <code>[no-quiet]</code> attribute overrides this setting:</p>
+<pre><code class="language-just">set quiet
+
+foo:
+  echo &quot;This is quiet&quot;
+
+[no-quiet]
+foo2:
+  echo &quot;This is not quiet&quot;
 </code></pre>
 <p>Shebang recipes are quiet by default:</p>
 <pre><code class="language-just">foo:
