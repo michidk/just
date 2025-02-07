@@ -14,7 +14,7 @@ impl<'src> CompileError<'src> {
   pub(crate) fn new(token: Token<'src>, kind: CompileErrorKind<'src>) -> CompileError<'src> {
     Self {
       token,
-      kind: Box::new(kind),
+      kind: kind.into(),
     }
   }
 }
@@ -28,23 +28,31 @@ fn capitalize(s: &str) -> String {
 }
 
 impl Display for CompileError<'_> {
-  fn fmt(&self, f: &mut Formatter) -> Result<(), fmt::Error> {
+  fn fmt(&self, f: &mut Formatter) -> fmt::Result {
     use CompileErrorKind::*;
 
     match &*self.kind {
-      AliasInvalidAttribute { alias, attribute } => {
+      AttributeArgumentCountMismatch {
+        attribute,
+        found,
+        min,
+        max,
+      } => {
         write!(
           f,
-          "Alias `{alias}` has invalid attribute `{}`",
-          attribute.name(),
-        )
+          "Attribute `{attribute}` got {found} {} but takes ",
+          Count("argument", *found),
+        )?;
+
+        if min == max {
+          let expected = min;
+          write!(f, "{expected} {}", Count("argument", *expected))
+        } else if found < min {
+          write!(f, "at least {min} {}", Count("argument", *min))
+        } else {
+          write!(f, "at most {max} {}", Count("argument", *max))
+        }
       }
-      AliasShadowsRecipe { alias, recipe_line } => write!(
-        f,
-        "Alias `{alias}` defined on line {} shadows recipe `{alias}` defined on line {}",
-        self.token.line.ordinal(),
-        recipe_line.ordinal(),
-      ),
       BacktickShebang => write!(f, "Backticks may not start with `#!`"),
       CircularRecipeDependency { recipe, ref circle } => {
         if circle.len() == 2 {
@@ -110,6 +118,13 @@ impl Display for CompileError<'_> {
       DuplicateVariable { variable } => {
         write!(f, "Variable `{variable}` has multiple definitions")
       }
+      DuplicateUnexport { variable } => {
+        write!(f, "Variable `{variable}` is unexported multiple times")
+      }
+      ExitMessageAndNoExitMessageAttribute { recipe } => write!(
+        f,
+        "Recipe `{recipe}` has both `[exit-message]` and `[no-exit-message]` attributes"
+      ),
       ExpectedKeyword { expected, found } => {
         let expected = List::or_ticked(expected);
         if found.kind == TokenKind::Identifier {
@@ -122,7 +137,13 @@ impl Display for CompileError<'_> {
           write!(f, "Expected keyword {expected} but found `{}`", found.kind)
         }
       }
+      ExportUnexported { variable } => {
+        write!(f, "Variable {variable} is both exported and unexported")
+      }
       ExtraLeadingWhitespace => write!(f, "Recipe line has extra leading whitespace"),
+      ExtraneousAttributes { count } => {
+        write!(f, "Extraneous {}", Count("attribute", *count))
+      }
       FunctionArgumentCountMismatch {
         function,
         found,
@@ -148,6 +169,15 @@ impl Display for CompileError<'_> {
         f,
         "Internal error, this may indicate a bug in just: {message}\n\
            consider filing an issue: https://github.com/casey/just/issues/new"
+      ),
+      InvalidAttribute {
+        item_name,
+        item_kind,
+        attribute,
+      } => write!(
+        f,
+        "{item_kind} `{item_name}` has invalid attribute `{}`",
+        attribute.name(),
       ),
       InvalidEscapeSequence { character } => write!(
         f,
@@ -176,6 +206,10 @@ impl Display for CompileError<'_> {
         "Found a mix of tabs and spaces in leading whitespace: `{}`\nLeading whitespace may \
            consist of tabs or spaces, but not both",
         ShowWhitespace(whitespace)
+      ),
+      NoCdAndWorkingDirectoryAttribute { recipe } => write!(
+        f,
+        "Recipe `{recipe}` has both `[no-cd]` and `[working-directory]` attributes"
       ),
       ParameterFollowsVariadicParameter { parameter } => {
         write!(f, "Parameter `{parameter}` follows variadic parameter")
@@ -206,29 +240,52 @@ impl Display for CompileError<'_> {
           )
         }
       }
+      ShebangAndScriptAttribute { recipe } => write!(
+        f,
+        "Recipe `{recipe}` has both shebang line and `[script]` attribute"
+      ),
+      ShellExpansion { err } => write!(f, "Shell expansion failed: {err}"),
       RequiredParameterFollowsDefaultParameter { parameter } => write!(
         f,
         "Non-default parameter `{parameter}` follows default parameter"
       ),
       UndefinedVariable { variable } => write!(f, "Variable `{variable}` not defined"),
-      UnexpectedAttributeArgument { attribute } => {
-        write!(
-          f,
-          "Attribute `{}` specified with argument but takes no arguments",
-          attribute.name(),
-        )
+      UnexpectedCharacter { expected } => {
+        write!(f, "Expected character {}", List::or_ticked(expected))
       }
-      UnexpectedCharacter { expected } => write!(f, "Expected character `{expected}`"),
       UnexpectedClosingDelimiter { close } => {
         write!(f, "Unexpected closing delimiter `{}`", close.close())
       }
       UnexpectedEndOfToken { expected } => {
-        write!(f, "Expected character `{expected}` but found end-of-file")
+        write!(
+          f,
+          "Expected character {} but found end-of-file",
+          List::or_ticked(expected),
+        )
       }
       UnexpectedToken {
         ref expected,
         found,
       } => write!(f, "Expected {}, but found {found}", List::or(expected)),
+      UnicodeEscapeCharacter { character } => {
+        write!(f, "expected hex digit [0-9A-Fa-f] but found `{character}`")
+      }
+      UnicodeEscapeDelimiter { character } => write!(
+        f,
+        "expected unicode escape sequence delimiter `{{` but found `{character}`"
+      ),
+      UnicodeEscapeEmpty => write!(f, "unicode escape sequences must not be empty"),
+      UnicodeEscapeLength { hex } => write!(
+        f,
+        "unicode escape sequence starting with `\\u{{{hex}` longer than six hex digits"
+      ),
+      UnicodeEscapeRange { hex } => {
+        write!(
+          f,
+          "unicode escape sequence value `{hex}` greater than maximum valid code point `10FFFF`",
+        )
+      }
+      UnicodeEscapeUnterminated => write!(f, "unterminated unicode escape sequence"),
       UnknownAliasTarget { alias, target } => {
         write!(f, "Alias `{alias}` has an unknown target `{target}`")
       }

@@ -1,20 +1,16 @@
 use super::*;
 
 #[test]
-fn modules_are_unstable() {
+fn modules_are_stable() {
   Test::new()
     .justfile(
       "
         mod foo
       ",
     )
-    .arg("foo")
-    .arg("foo")
-    .stderr(
-      "error: Modules are currently unstable. \
-      Invoke `just` with the `--unstable` flag to enable unstable features.\n",
-    )
-    .status(EXIT_FAILURE)
+    .write("foo.just", "@bar:\n echo ok")
+    .args(["foo", "bar"])
+    .stdout("ok\n")
     .run();
 }
 
@@ -27,8 +23,6 @@ fn default_recipe_in_submodule_must_have_no_arguments() {
         mod foo
       ",
     )
-    .test_round_trip(false)
-    .arg("--unstable")
     .arg("foo")
     .stderr("error: Recipe `foo` cannot be used as default recipe since it requires at least 1 argument.\n")
     .status(EXIT_FAILURE)
@@ -44,8 +38,6 @@ fn module_recipes_can_be_run_as_subcommands() {
         mod foo
       ",
     )
-    .test_round_trip(false)
-    .arg("--unstable")
     .arg("foo")
     .arg("foo")
     .stdout("FOO\n")
@@ -61,8 +53,6 @@ fn module_recipes_can_be_run_with_path_syntax() {
         mod foo
       ",
     )
-    .test_round_trip(false)
-    .arg("--unstable")
     .arg("foo::foo")
     .stdout("FOO\n")
     .run();
@@ -78,8 +68,6 @@ fn nested_module_recipes_can_be_run_with_path_syntax() {
         mod foo
       ",
     )
-    .test_round_trip(false)
-    .arg("--unstable")
     .arg("foo::bar::baz")
     .stdout("BAZ\n")
     .run();
@@ -88,23 +76,20 @@ fn nested_module_recipes_can_be_run_with_path_syntax() {
 #[test]
 fn invalid_path_syntax() {
   Test::new()
-    .test_round_trip(false)
     .arg(":foo::foo")
-    .stderr("error: Justfile does not contain recipe `:foo::foo`.\n")
+    .stderr("error: Justfile does not contain recipe `:foo::foo`\n")
     .status(EXIT_FAILURE)
     .run();
 
   Test::new()
-    .test_round_trip(false)
     .arg("foo::foo:")
-    .stderr("error: Justfile does not contain recipe `foo::foo:`.\n")
+    .stderr("error: Justfile does not contain recipe `foo::foo:`\n")
     .status(EXIT_FAILURE)
     .run();
 
   Test::new()
-    .test_round_trip(false)
     .arg("foo:::foo")
-    .stderr("error: Justfile does not contain recipe `foo:::foo`.\n")
+    .stderr("error: Justfile does not contain recipe `foo:::foo`\n")
     .status(EXIT_FAILURE)
     .run();
 }
@@ -112,10 +97,9 @@ fn invalid_path_syntax() {
 #[test]
 fn missing_recipe_after_invalid_path() {
   Test::new()
-    .test_round_trip(false)
     .arg(":foo::foo")
     .arg("bar")
-    .stderr("error: Justfile does not contain recipes `:foo::foo` or `bar`.\n")
+    .stderr("error: Justfile does not contain recipe `:foo::foo`\n")
     .status(EXIT_FAILURE)
     .run();
 }
@@ -130,8 +114,6 @@ fn assignments_are_evaluated_in_modules() {
         bar := 'PARENT'
       ",
     )
-    .test_round_trip(false)
-    .arg("--unstable")
     .arg("foo")
     .arg("foo")
     .stdout("CHILD\n")
@@ -147,8 +129,6 @@ fn module_subcommand_runs_default_recipe() {
         mod foo
       ",
     )
-    .test_round_trip(false)
-    .arg("--unstable")
     .arg("foo")
     .stdout("FOO\n")
     .run();
@@ -164,8 +144,6 @@ fn modules_can_contain_other_modules() {
         mod foo
       ",
     )
-    .test_round_trip(false)
-    .arg("--unstable")
     .arg("foo")
     .arg("bar")
     .arg("baz")
@@ -183,8 +161,6 @@ fn circular_module_imports_are_detected() {
         mod foo
       ",
     )
-    .test_round_trip(false)
-    .arg("--unstable")
     .arg("foo")
     .arg("bar")
     .arg("baz")
@@ -200,22 +176,30 @@ fn modules_use_module_settings() {
   Test::new()
     .write(
       "foo.just",
-      "set allow-duplicate-recipes\nfoo:\nfoo:\n @echo FOO\n",
+      "set allow-duplicate-recipes
+foo:
+foo:
+  @echo FOO
+",
     )
     .justfile(
       "
         mod foo
       ",
     )
-    .test_round_trip(false)
-    .arg("--unstable")
     .arg("foo")
     .arg("foo")
     .stdout("FOO\n")
     .run();
 
   Test::new()
-    .write("foo.just", "\nfoo:\nfoo:\n @echo FOO\n")
+    .write(
+      "foo.just",
+      "foo:
+foo:
+  @echo FOO
+",
+    )
     .justfile(
       "
         mod foo
@@ -223,17 +207,15 @@ fn modules_use_module_settings() {
         set allow-duplicate-recipes
       ",
     )
-    .test_round_trip(false)
     .status(EXIT_FAILURE)
-    .arg("--unstable")
     .arg("foo")
     .arg("foo")
     .stderr(
       "
-      error: Recipe `foo` first defined on line 2 is redefined on line 3
-       ——▶ foo.just:3:1
+      error: Recipe `foo` first defined on line 1 is redefined on line 2
+       ——▶ foo.just:2:1
         │
-      3 │ foo:
+      2 │ foo:
         │ ^^^
     ",
     )
@@ -259,9 +241,7 @@ fn modules_conflict_with_recipes() {
         │ ^^^
     ",
     )
-    .test_round_trip(false)
     .status(EXIT_FAILURE)
-    .arg("--unstable")
     .run();
 }
 
@@ -285,9 +265,7 @@ fn modules_conflict_with_aliases() {
         │       ^^^
     ",
     )
-    .test_round_trip(false)
     .status(EXIT_FAILURE)
-    .arg("--unstable")
     .run();
 }
 
@@ -303,7 +281,6 @@ fn modules_conflict_with_other_modules() {
         bar:
       ",
     )
-    .test_round_trip(false)
     .status(EXIT_FAILURE)
     .stderr(
       "
@@ -314,7 +291,6 @@ fn modules_conflict_with_other_modules() {
         │     ^^^
     ",
     )
-    .arg("--unstable")
     .run();
 }
 
@@ -327,8 +303,6 @@ fn modules_are_dumped_correctly() {
         mod foo
       ",
     )
-    .test_round_trip(false)
-    .arg("--unstable")
     .arg("--dump")
     .stdout("mod foo\n")
     .run();
@@ -343,8 +317,6 @@ fn optional_modules_are_dumped_correctly() {
         mod? foo
       ",
     )
-    .test_round_trip(false)
-    .arg("--unstable")
     .arg("--dump")
     .stdout("mod? foo\n")
     .run();
@@ -359,8 +331,6 @@ fn modules_can_be_in_subdirectory() {
         mod foo
       ",
     )
-    .test_round_trip(false)
-    .arg("--unstable")
     .arg("foo")
     .arg("foo")
     .stdout("FOO\n")
@@ -376,8 +346,6 @@ fn modules_in_subdirectory_can_be_named_justfile() {
         mod foo
       ",
     )
-    .test_round_trip(false)
-    .arg("--unstable")
     .arg("foo")
     .arg("foo")
     .stdout("FOO\n")
@@ -393,8 +361,6 @@ fn modules_in_subdirectory_can_be_named_justfile_with_any_case() {
         mod foo
       ",
     )
-    .test_round_trip(false)
-    .arg("--unstable")
     .arg("foo")
     .arg("foo")
     .stdout("FOO\n")
@@ -410,8 +376,6 @@ fn modules_in_subdirectory_can_have_leading_dot() {
         mod foo
       ",
     )
-    .test_round_trip(false)
-    .arg("--unstable")
     .arg("foo")
     .arg("foo")
     .stdout("FOO\n")
@@ -428,17 +392,16 @@ fn modules_require_unambiguous_file() {
         mod foo
       ",
     )
-    .test_round_trip(false)
-    .arg("--unstable")
     .status(EXIT_FAILURE)
     .stderr(
       "
-      error: Found multiple source files for module `foo`: `foo.just` and `foo/justfile`
+      error: Found multiple source files for module `foo`: `foo/justfile` and `foo.just`
        ——▶ justfile:1:5
         │
       1 │ mod foo
         │     ^^^
-      ",
+      "
+      .replace('/', MAIN_SEPARATOR_STR),
     )
     .run();
 }
@@ -451,8 +414,6 @@ fn missing_module_file_error() {
         mod foo
       ",
     )
-    .test_round_trip(false)
-    .arg("--unstable")
     .status(EXIT_FAILURE)
     .stderr(
       "
@@ -477,8 +438,6 @@ fn missing_optional_modules_do_not_trigger_error() {
           @echo BAR
       ",
     )
-    .test_round_trip(false)
-    .arg("--unstable")
     .stdout("BAR\n")
     .run();
 }
@@ -494,8 +453,6 @@ fn missing_optional_modules_do_not_conflict() {
       ",
     )
     .write("baz.just", "baz:\n @echo BAZ")
-    .test_round_trip(false)
-    .arg("--unstable")
     .arg("foo")
     .arg("baz")
     .stdout("BAZ\n")
@@ -503,31 +460,8 @@ fn missing_optional_modules_do_not_conflict() {
 }
 
 #[test]
-fn list_displays_recipes_in_submodules() {
-  Test::new()
-    .write("foo.just", "bar:\n @echo FOO")
-    .justfile(
-      "
-        mod foo
-      ",
-    )
-    .test_round_trip(false)
-    .arg("--unstable")
-    .arg("--list")
-    .stdout(
-      "
-      Available recipes:
-          foo:
-              bar
-    ",
-    )
-    .run();
-}
-
-#[test]
 fn root_dotenv_is_available_to_submodules() {
   Test::new()
-    .write("foo.just", "foo:\n @echo $DOTENV_KEY")
     .justfile(
       "
         set dotenv-load
@@ -535,10 +469,9 @@ fn root_dotenv_is_available_to_submodules() {
         mod foo
       ",
     )
-    .test_round_trip(false)
-    .arg("--unstable")
-    .arg("foo")
-    .arg("foo")
+    .write("foo.just", "foo:\n @echo $DOTENV_KEY")
+    .write(".env", "DOTENV_KEY=dotenv-value")
+    .args(["foo", "foo"])
     .stdout("dotenv-value\n")
     .run();
 }
@@ -546,10 +479,6 @@ fn root_dotenv_is_available_to_submodules() {
 #[test]
 fn dotenv_settings_in_submodule_are_ignored() {
   Test::new()
-    .write(
-      "foo.just",
-      "set dotenv-load := false\nfoo:\n @echo $DOTENV_KEY",
-    )
     .justfile(
       "
         set dotenv-load
@@ -557,10 +486,12 @@ fn dotenv_settings_in_submodule_are_ignored() {
         mod foo
       ",
     )
-    .test_round_trip(false)
-    .arg("--unstable")
-    .arg("foo")
-    .arg("foo")
+    .write(
+      "foo.just",
+      "set dotenv-load := false\nfoo:\n @echo $DOTENV_KEY",
+    )
+    .write(".env", "DOTENV_KEY=dotenv-value")
+    .args(["foo", "foo"])
     .stdout("dotenv-value\n")
     .run();
 }
@@ -574,8 +505,21 @@ fn modules_may_specify_path() {
         mod foo 'commands/foo.just'
       ",
     )
-    .test_round_trip(false)
-    .arg("--unstable")
+    .arg("foo")
+    .arg("foo")
+    .stdout("FOO\n")
+    .run();
+}
+
+#[test]
+fn modules_may_specify_path_to_directory() {
+  Test::new()
+    .write("commands/bar/mod.just", "foo:\n @echo FOO")
+    .justfile(
+      "
+        mod foo 'commands/bar'
+      ",
+    )
     .arg("foo")
     .arg("foo")
     .stdout("FOO\n")
@@ -591,8 +535,6 @@ fn modules_with_paths_are_dumped_correctly() {
         mod foo 'commands/foo.just'
       ",
     )
-    .test_round_trip(false)
-    .arg("--unstable")
     .arg("--dump")
     .stdout("mod foo 'commands/foo.just'\n")
     .run();
@@ -607,8 +549,6 @@ fn optional_modules_with_paths_are_dumped_correctly() {
         mod? foo 'commands/foo.just'
       ",
     )
-    .test_round_trip(false)
-    .arg("--unstable")
     .arg("--dump")
     .stdout("mod? foo 'commands/foo.just'\n")
     .run();
@@ -623,7 +563,6 @@ fn recipes_may_be_named_mod() {
           @echo FOO
       ",
     )
-    .test_round_trip(false)
     .arg("mod")
     .arg("bar")
     .stdout("FOO\n")
@@ -640,8 +579,6 @@ fn submodule_linewise_recipes_run_in_submodule_directory() {
         mod foo
       ",
     )
-    .test_round_trip(false)
-    .arg("--unstable")
     .arg("foo")
     .arg("foo")
     .stdout("BAR")
@@ -658,8 +595,6 @@ fn submodule_shebang_recipes_run_in_submodule_directory() {
         mod foo
       ",
     )
-    .test_round_trip(false)
-    .arg("--unstable")
     .arg("foo")
     .arg("foo")
     .stdout("BAR")
@@ -676,43 +611,10 @@ fn module_paths_beginning_with_tilde_are_expanded_to_homdir() {
         mod foo '~/mod.just'
       ",
     )
-    .test_round_trip(false)
-    .arg("--unstable")
     .arg("foo")
     .arg("foo")
     .stdout("FOOBAR\n")
     .env("HOME", "foobar")
-    .run();
-}
-
-#[test]
-fn module_recipe_list_alignment_ignores_private_recipes() {
-  Test::new()
-    .write(
-      "foo.just",
-      "
-# foos
-foo:
- @echo FOO
-
-[private]
-barbarbar:
- @echo BAR
-
-@_bazbazbaz:
- @echo BAZ
-      ",
-    )
-    .justfile("mod foo")
-    .test_round_trip(false)
-    .arg("--unstable")
-    .arg("--list")
-    .stdout(
-      "Available recipes:
-    foo:
-        foo # foos
-",
-    )
     .run();
 }
 
@@ -728,10 +630,371 @@ fn recipes_with_same_name_are_both_run() {
           @echo ROOT
       ",
     )
-    .test_round_trip(false)
-    .arg("--unstable")
     .arg("foo::bar")
     .arg("bar")
     .stdout("MODULE\nROOT\n")
+    .run();
+}
+
+#[test]
+fn submodule_recipe_not_found_error_message() {
+  Test::new()
+    .args(["foo::bar"])
+    .stderr("error: Justfile does not contain submodule `foo`\n")
+    .status(1)
+    .run();
+}
+
+#[test]
+fn submodule_recipe_not_found_spaced_error_message() {
+  Test::new()
+    .write("foo.just", "bar:\n @echo MODULE")
+    .justfile(
+      "
+        mod foo
+      ",
+    )
+    .args(["foo", "baz"])
+    .stderr("error: Justfile does not contain recipe `foo baz`\nDid you mean `bar`?\n")
+    .status(1)
+    .run();
+}
+
+#[test]
+fn submodule_recipe_not_found_colon_separated_error_message() {
+  Test::new()
+    .write("foo.just", "bar:\n @echo MODULE")
+    .justfile(
+      "
+        mod foo
+      ",
+    )
+    .args(["foo::baz"])
+    .stderr("error: Justfile does not contain recipe `foo::baz`\nDid you mean `bar`?\n")
+    .status(1)
+    .run();
+}
+
+#[test]
+fn colon_separated_path_does_not_run_recipes() {
+  Test::new()
+    .justfile(
+      "
+        foo:
+          @echo FOO
+
+        bar:
+          @echo BAR
+      ",
+    )
+    .args(["foo::bar"])
+    .stderr("error: Expected submodule at `foo` but found recipe.\n")
+    .status(1)
+    .run();
+}
+
+#[test]
+fn expected_submodule_but_found_recipe_in_root_error() {
+  Test::new()
+    .justfile("foo:")
+    .arg("foo::baz")
+    .stderr("error: Expected submodule at `foo` but found recipe.\n")
+    .status(1)
+    .run();
+}
+
+#[test]
+fn expected_submodule_but_found_recipe_in_submodule_error() {
+  Test::new()
+    .justfile("mod foo")
+    .write("foo.just", "bar:")
+    .args(["foo::bar::baz"])
+    .stderr("error: Expected submodule at `foo::bar` but found recipe.\n")
+    .status(1)
+    .run();
+}
+
+#[test]
+fn colon_separated_path_components_are_not_used_as_arguments() {
+  Test::new()
+    .justfile("foo bar:")
+    .args(["foo::bar"])
+    .stderr("error: Expected submodule at `foo` but found recipe.\n")
+    .status(1)
+    .run();
+}
+
+#[test]
+fn comments_can_follow_modules() {
+  Test::new()
+    .write("foo.just", "foo:\n @echo FOO")
+    .justfile(
+      "
+        mod foo # this is foo
+      ",
+    )
+    .args(["foo", "foo"])
+    .stdout("FOO\n")
+    .run();
+}
+
+#[test]
+fn doc_comment_on_module() {
+  Test::new()
+    .write("foo.just", "")
+    .justfile(
+      "
+        # Comment
+        mod foo
+      ",
+    )
+    .test_round_trip(false)
+    .arg("--list")
+    .stdout("Available recipes:\n    foo ... # Comment\n")
+    .run();
+}
+
+#[test]
+fn doc_attribute_on_module() {
+  Test::new()
+    .write("foo.just", "")
+    .justfile(
+      r#"
+        # Suppressed comment
+        [doc: "Comment"]
+        mod foo
+      "#,
+    )
+    .test_round_trip(false)
+    .arg("--list")
+    .stdout("Available recipes:\n    foo ... # Comment\n")
+    .run();
+}
+
+#[test]
+fn group_attribute_on_module() {
+  Test::new()
+    .write("foo.just", "")
+    .write("bar.just", "")
+    .write("zee.just", "")
+    .justfile(
+      r"
+        [group('alpha')]
+        mod zee
+
+        [group('alpha')]
+        mod foo
+
+        [group('alpha')]
+        a:
+
+        [group('beta')]
+        b:
+
+        [group('beta')]
+        mod bar
+
+        c:
+      ",
+    )
+    .test_round_trip(false)
+    .arg("--list")
+    .stdout(
+      "
+        Available recipes:
+            c
+
+            [alpha]
+            a
+            foo ...
+            zee ...
+
+            [beta]
+            b
+            bar ...
+      ",
+    )
+    .run();
+}
+
+#[test]
+fn group_attribute_on_module_unsorted() {
+  Test::new()
+    .write("foo.just", "")
+    .write("bar.just", "")
+    .write("zee.just", "")
+    .justfile(
+      r"
+        [group('alpha')]
+        mod zee
+
+        [group('alpha')]
+        mod foo
+
+        [group('alpha')]
+        a:
+
+        [group('beta')]
+        b:
+
+        [group('beta')]
+        mod bar
+
+        c:
+      ",
+    )
+    .test_round_trip(false)
+    .arg("--list")
+    .arg("--unsorted")
+    .stdout(
+      "
+        Available recipes:
+            c
+
+            [alpha]
+            a
+            zee ...
+            foo ...
+
+            [beta]
+            b
+            bar ...
+      ",
+    )
+    .run();
+}
+
+#[test]
+fn group_attribute_on_module_list_submodule() {
+  Test::new()
+    .write("foo.just", "d:")
+    .write("bar.just", "e:")
+    .write("zee.just", "f:")
+    .justfile(
+      r"
+        [group('alpha')]
+        mod zee
+
+        [group('alpha')]
+        mod foo
+
+        [group('alpha')]
+        a:
+
+        [group('beta')]
+        b:
+
+        [group('beta')]
+        mod bar
+
+        c:
+      ",
+    )
+    .test_round_trip(false)
+    .arg("--list")
+    .arg("--list-submodules")
+    .stdout(
+      "
+        Available recipes:
+            c
+
+            [alpha]
+            a
+            foo:
+                d
+            zee:
+                f
+
+            [beta]
+            b
+            bar:
+                e
+      ",
+    )
+    .run();
+}
+
+#[test]
+fn group_attribute_on_module_list_submodule_unsorted() {
+  Test::new()
+    .write("foo.just", "d:")
+    .write("bar.just", "e:")
+    .write("zee.just", "f:")
+    .justfile(
+      r"
+        [group('alpha')]
+        mod zee
+
+        [group('alpha')]
+        mod foo
+
+        [group('alpha')]
+        a:
+
+        [group('beta')]
+        b:
+
+        [group('beta')]
+        mod bar
+
+        c:
+      ",
+    )
+    .test_round_trip(false)
+    .arg("--list")
+    .arg("--list-submodules")
+    .arg("--unsorted")
+    .stdout(
+      "
+        Available recipes:
+            c
+
+            [alpha]
+            a
+            zee:
+                f
+            foo:
+                d
+
+            [beta]
+            b
+            bar:
+                e
+      ",
+    )
+    .run();
+}
+
+#[test]
+fn bad_module_attribute_fails() {
+  Test::new()
+    .write("foo.just", "")
+    .justfile(
+      r"
+        [no-cd]
+        mod foo
+      ",
+    )
+    .test_round_trip(false)
+    .arg("--list")
+    .stderr("error: Module `foo` has invalid attribute `no-cd`\n ——▶ justfile:2:5\n  │\n2 │ mod foo\n  │     ^^^\n")
+    .status(EXIT_FAILURE)
+    .run();
+}
+
+#[test]
+fn empty_doc_attribute_on_module() {
+  Test::new()
+    .write("foo.just", "")
+    .justfile(
+      r"
+        # Suppressed comment
+        [doc]
+        mod foo
+      ",
+    )
+    .test_round_trip(false)
+    .arg("--list")
+    .stdout("Available recipes:\n    foo ...\n")
     .run();
 }

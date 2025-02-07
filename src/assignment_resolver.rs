@@ -31,7 +31,29 @@ impl<'src: 'run, 'run> AssignmentResolver<'src, 'run> {
     self.stack.push(name);
 
     if let Some(assignment) = self.assignments.get(name) {
-      self.resolve_expression(&assignment.value)?;
+      for variable in assignment.value.variables() {
+        let name = variable.lexeme();
+
+        if self.evaluated.contains(name) || constants().contains_key(name) {
+          continue;
+        }
+
+        if self.stack.contains(&name) {
+          self.stack.push(name);
+          return Err(
+            self.assignments[name]
+              .name
+              .error(CircularVariableDependency {
+                variable: name,
+                circle: self.stack.clone(),
+              }),
+          );
+        } else if self.assignments.contains_key(name) {
+          self.resolve_assignment(name)?;
+        } else {
+          return Err(variable.error(UndefinedVariable { variable: name }));
+        }
+      }
       self.evaluated.insert(name);
     } else {
       let message = format!("attempted to resolve unknown assignment `{name}`");
@@ -50,88 +72,6 @@ impl<'src: 'run, 'run> AssignmentResolver<'src, 'run> {
     self.stack.pop();
 
     Ok(())
-  }
-
-  fn resolve_expression(&mut self, expression: &Expression<'src>) -> CompileResult<'src> {
-    match expression {
-      Expression::Variable { name } => {
-        let variable = name.lexeme();
-        if self.evaluated.contains(variable) {
-          Ok(())
-        } else if self.stack.contains(&variable) {
-          self.stack.push(variable);
-          Err(
-            self.assignments[variable]
-              .name
-              .error(CircularVariableDependency {
-                variable,
-                circle: self.stack.clone(),
-              }),
-          )
-        } else if self.assignments.contains_key(variable) {
-          self.resolve_assignment(variable)
-        } else {
-          Err(name.token.error(UndefinedVariable { variable }))
-        }
-      }
-      Expression::Call { thunk } => match thunk {
-        Thunk::Nullary { .. } => Ok(()),
-        Thunk::Unary { arg, .. } => self.resolve_expression(arg),
-        Thunk::UnaryOpt { args: (a, b), .. } => {
-          self.resolve_expression(a)?;
-          if let Some(b) = b.as_ref() {
-            self.resolve_expression(b)?;
-          }
-          Ok(())
-        }
-        Thunk::Binary { args: [a, b], .. } => {
-          self.resolve_expression(a)?;
-          self.resolve_expression(b)
-        }
-        Thunk::BinaryPlus {
-          args: ([a, b], rest),
-          ..
-        } => {
-          self.resolve_expression(a)?;
-          self.resolve_expression(b)?;
-          for arg in rest {
-            self.resolve_expression(arg)?;
-          }
-          Ok(())
-        }
-        Thunk::Ternary {
-          args: [a, b, c], ..
-        } => {
-          self.resolve_expression(a)?;
-          self.resolve_expression(b)?;
-          self.resolve_expression(c)
-        }
-      },
-      Expression::Concatenation { lhs, rhs } => {
-        self.resolve_expression(lhs)?;
-        self.resolve_expression(rhs)
-      }
-      Expression::Join { lhs, rhs } => {
-        if let Some(lhs) = lhs {
-          self.resolve_expression(lhs)?;
-        }
-        self.resolve_expression(rhs)
-      }
-      Expression::Conditional {
-        lhs,
-        rhs,
-        then,
-        otherwise,
-        ..
-      } => {
-        self.resolve_expression(lhs)?;
-        self.resolve_expression(rhs)?;
-        self.resolve_expression(then)?;
-        self.resolve_expression(otherwise)
-      }
-      Expression::StringLiteral { .. } | Expression::Backtick { .. } => Ok(()),
-      Expression::Group { contents } => self.resolve_expression(contents),
-    }
   }
 }
 

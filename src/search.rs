@@ -1,38 +1,66 @@
 use {super::*, std::path::Component};
 
 const DEFAULT_JUSTFILE_NAME: &str = JUSTFILE_NAMES[0];
-pub(crate) const JUSTFILE_NAMES: &[&str] = &["justfile", ".justfile"];
+pub(crate) const JUSTFILE_NAMES: [&str; 2] = ["justfile", ".justfile"];
 const PROJECT_ROOT_CHILDREN: &[&str] = &[".bzr", ".git", ".hg", ".svn", "_darcs"];
 
+#[derive(Debug)]
 pub(crate) struct Search {
   pub(crate) justfile: PathBuf,
   pub(crate) working_directory: PathBuf,
 }
 
 impl Search {
+  fn global_justfile_paths() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+
+    if let Some(config_dir) = dirs::config_dir() {
+      paths.push(config_dir.join("just").join(DEFAULT_JUSTFILE_NAME));
+    }
+
+    if let Some(home_dir) = dirs::home_dir() {
+      paths.push(
+        home_dir
+          .join(".config")
+          .join("just")
+          .join(DEFAULT_JUSTFILE_NAME),
+      );
+
+      for justfile_name in JUSTFILE_NAMES {
+        paths.push(home_dir.join(justfile_name));
+      }
+    }
+
+    paths
+  }
+
+  /// Find justfile given search configuration and invocation directory
   pub(crate) fn find(
     search_config: &SearchConfig,
     invocation_directory: &Path,
   ) -> SearchResult<Self> {
     match search_config {
-      SearchConfig::FromInvocationDirectory => Self::find_next(invocation_directory),
+      SearchConfig::FromInvocationDirectory => Self::find_in_directory(invocation_directory),
       SearchConfig::FromSearchDirectory { search_directory } => {
         let search_directory = Self::clean(invocation_directory, search_directory);
-
         let justfile = Self::justfile(&search_directory)?;
-
         let working_directory = Self::working_directory_from_justfile(&justfile)?;
-
         Ok(Self {
           justfile,
           working_directory,
         })
       }
+      SearchConfig::GlobalJustfile => Ok(Self {
+        justfile: Self::global_justfile_paths()
+          .iter()
+          .find(|path| path.exists())
+          .cloned()
+          .ok_or(SearchError::GlobalJustfileNotFound)?,
+        working_directory: Self::project_root(invocation_directory)?,
+      }),
       SearchConfig::WithJustfile { justfile } => {
         let justfile = Self::clean(invocation_directory, justfile);
-
         let working_directory = Self::working_directory_from_justfile(&justfile)?;
-
         Ok(Self {
           justfile,
           working_directory,
@@ -48,17 +76,29 @@ impl Search {
     }
   }
 
-  pub(crate) fn find_next(starting_dir: &Path) -> SearchResult<Self> {
+  /// Find justfile starting from parent directory of current justfile
+  pub(crate) fn search_parent_directory(&self) -> SearchResult<Self> {
+    let parent = self
+      .justfile
+      .parent()
+      .and_then(|path| path.parent())
+      .ok_or_else(|| SearchError::JustfileHadNoParent {
+        path: self.justfile.clone(),
+      })?;
+    Self::find_in_directory(parent)
+  }
+
+  /// Find justfile starting in given directory searching upwards in directory tree
+  fn find_in_directory(starting_dir: &Path) -> SearchResult<Self> {
     let justfile = Self::justfile(starting_dir)?;
-
     let working_directory = Self::working_directory_from_justfile(&justfile)?;
-
     Ok(Self {
       justfile,
       working_directory,
     })
   }
 
+  /// Get working directory and justfile path for newly-initialized justfile
   pub(crate) fn init(
     search_config: &SearchConfig,
     invocation_directory: &Path,
@@ -66,39 +106,30 @@ impl Search {
     match search_config {
       SearchConfig::FromInvocationDirectory => {
         let working_directory = Self::project_root(invocation_directory)?;
-
         let justfile = working_directory.join(DEFAULT_JUSTFILE_NAME);
-
         Ok(Self {
           justfile,
           working_directory,
         })
       }
-
       SearchConfig::FromSearchDirectory { search_directory } => {
         let search_directory = Self::clean(invocation_directory, search_directory);
-
         let working_directory = Self::project_root(&search_directory)?;
-
         let justfile = working_directory.join(DEFAULT_JUSTFILE_NAME);
-
         Ok(Self {
           justfile,
           working_directory,
         })
       }
-
+      SearchConfig::GlobalJustfile => Err(SearchError::GlobalJustfileInit),
       SearchConfig::WithJustfile { justfile } => {
         let justfile = Self::clean(invocation_directory, justfile);
-
         let working_directory = Self::working_directory_from_justfile(&justfile)?;
-
         Ok(Self {
           justfile,
           working_directory,
         })
       }
-
       SearchConfig::WithJustfileAndWorkingDirectory {
         justfile,
         working_directory,
@@ -109,7 +140,9 @@ impl Search {
     }
   }
 
-  pub(crate) fn justfile(directory: &Path) -> SearchResult<PathBuf> {
+  /// Search upwards from `directory` for a file whose name matches one of
+  /// `JUSTFILE_NAMES`
+  fn justfile(directory: &Path) -> SearchResult<PathBuf> {
     for directory in directory.ancestors() {
       let mut candidates = BTreeSet::new();
 
@@ -159,6 +192,9 @@ impl Search {
     clean.into_iter().collect()
   }
 
+  /// Search upwards from `directory` for the root directory of a software
+  /// project, as determined by the presence of one of the version control
+  /// system directories given in `PROJECT_ROOT_CHILDREN`
   fn project_root(directory: &Path) -> SearchResult<PathBuf> {
     for directory in directory.ancestors() {
       let entries = fs::read_dir(directory).map_err(|io_error| SearchError::Io {

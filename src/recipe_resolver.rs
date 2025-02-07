@@ -8,8 +8,9 @@ pub(crate) struct RecipeResolver<'src: 'run, 'run> {
 
 impl<'src: 'run, 'run> RecipeResolver<'src, 'run> {
   pub(crate) fn resolve_recipes(
-    unresolved_recipes: Table<'src, UnresolvedRecipe<'src>>,
     assignments: &'run Table<'src, Assignment<'src>>,
+    settings: &Settings,
+    unresolved_recipes: Table<'src, UnresolvedRecipe<'src>>,
   ) -> CompileResult<'src, Table<'src, Rc<Recipe<'src>>>> {
     let mut resolver = Self {
       resolved_recipes: Table::new(),
@@ -22,10 +23,10 @@ impl<'src: 'run, 'run> RecipeResolver<'src, 'run> {
     }
 
     for recipe in resolver.resolved_recipes.values() {
-      for parameter in &recipe.parameters {
+      for (i, parameter) in recipe.parameters.iter().enumerate() {
         if let Some(expression) = &parameter.default {
           for variable in expression.variables() {
-            resolver.resolve_variable(&variable, &[])?;
+            resolver.resolve_variable(&variable, &recipe.parameters[..i])?;
           }
         }
       }
@@ -39,6 +40,10 @@ impl<'src: 'run, 'run> RecipeResolver<'src, 'run> {
       }
 
       for line in &recipe.body {
+        if line.is_comment() && settings.ignore_comments {
+          continue;
+        }
+
         for fragment in &line.fragments {
           if let Fragment::Interpolation { expression, .. } = fragment {
             for variable in expression.variables() {
@@ -58,10 +63,12 @@ impl<'src: 'run, 'run> RecipeResolver<'src, 'run> {
     parameters: &[Parameter],
   ) -> CompileResult<'src> {
     let name = variable.lexeme();
-    let undefined =
-      !self.assignments.contains_key(name) && !parameters.iter().any(|p| p.name.lexeme() == name);
 
-    if undefined {
+    let defined = self.assignments.contains_key(name)
+      || parameters.iter().any(|p| p.name.lexeme() == name)
+      || constants().contains_key(name);
+
+    if !defined {
       return Err(variable.error(UndefinedVariable { variable: name }));
     }
 

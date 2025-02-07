@@ -3,14 +3,14 @@ pub(crate) use {
     assert_stdout::assert_stdout,
     assert_success::assert_success,
     tempdir::tempdir,
-    test::{Output, Test},
+    test::{assert_eval_eq, Output, Test},
   },
-  cradle::input::Input,
   executable_path::executable_path,
-  just::unindent,
+  just::{unindent, Response},
   libc::{EXIT_FAILURE, EXIT_SUCCESS},
   pretty_assertions::Comparison,
   regex::Regex,
+  serde::{Deserialize, Serialize},
   serde_json::{json, Value},
   std::{
     collections::BTreeMap,
@@ -20,7 +20,7 @@ pub(crate) use {
     fs,
     io::Write,
     iter,
-    path::{Path, PathBuf, MAIN_SEPARATOR},
+    path::{Path, PathBuf, MAIN_SEPARATOR, MAIN_SEPARATOR_STR},
     process::{Command, Stdio},
     str,
   },
@@ -29,13 +29,23 @@ pub(crate) use {
   which::which,
 };
 
+fn default<T: Default>() -> T {
+  Default::default()
+}
+
 #[macro_use]
 mod test;
 
+mod alias_style;
 mod allow_duplicate_recipes;
+mod allow_duplicate_variables;
+mod allow_missing;
 mod assert_stdout;
 mod assert_success;
+mod assertions;
+mod assignment;
 mod attributes;
+mod backticks;
 mod byte_order_mark;
 mod changelog;
 mod choose;
@@ -43,6 +53,8 @@ mod command;
 mod completions;
 mod conditional;
 mod confirm;
+mod constants;
+mod datetime;
 mod delimiters;
 mod directories;
 mod dotenv;
@@ -51,10 +63,14 @@ mod equals;
 mod error_messages;
 mod evaluate;
 mod examples;
+mod explain;
 mod export;
 mod fallback;
-mod fmt;
+mod format;
 mod functions;
+#[cfg(unix)]
+mod global;
+mod groups;
 mod ignore_comments;
 mod imports;
 mod init;
@@ -63,14 +79,19 @@ mod interrupts;
 mod invocation_directory;
 mod json;
 mod line_prefixes;
+mod list;
+mod logical_operators;
+mod man;
 mod misc;
 mod modules;
 mod multibyte_char;
 mod newline_escape;
+mod no_aliases;
 mod no_cd;
 mod no_dependencies;
 mod no_exit_message;
 mod os_attributes;
+mod parameters;
 mod parser;
 mod positional_arguments;
 mod private;
@@ -79,20 +100,28 @@ mod quote;
 mod readme;
 mod recursion_limit;
 mod regexes;
+mod request;
 mod run;
+mod script;
 mod search;
 mod search_arguments;
 mod shadowing_parameters;
 mod shebang;
 mod shell;
+mod shell_expansion;
 mod show;
 mod slash_operator;
 mod string;
 mod subsequents;
 mod summary;
 mod tempdir;
+mod timestamps;
 mod undefined_variables;
+mod unexport;
 mod unstable;
+mod which_function;
+#[cfg(windows)]
+mod windows;
 #[cfg(target_family = "windows")]
 mod windows_shell;
 mod working_directory;

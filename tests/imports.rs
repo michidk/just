@@ -17,7 +17,6 @@ fn import_succeeds() {
           @echo A
       ",
     )
-    .test_round_trip(false)
     .arg("a")
     .stdout("B\nA\n")
     .run();
@@ -34,7 +33,6 @@ fn missing_import_file_error() {
           @echo A
       ",
     )
-    .test_round_trip(false)
     .arg("a")
     .status(EXIT_FAILURE)
     .stderr(
@@ -60,7 +58,6 @@ fn missing_optional_imports_are_ignored() {
           @echo A
       ",
     )
-    .test_round_trip(false)
     .arg("a")
     .stdout("A\n")
     .run();
@@ -79,7 +76,6 @@ fn trailing_spaces_after_import_are_ignored() {
         @echo A
     ",
     )
-    .test_round_trip(false)
     .stdout("A\n")
     .run();
 }
@@ -99,7 +95,6 @@ fn import_after_recipe() {
       import './import.justfile'
       ",
     )
-    .test_round_trip(false)
     .stdout("A\n")
     .run();
 }
@@ -126,7 +121,6 @@ fn import_recipes_are_not_default() {
       "import.justfile": "bar:",
     })
     .justfile("import './import.justfile'")
-    .test_round_trip(false)
     .status(EXIT_FAILURE)
     .stderr("error: Justfile contains no default recipe.\n")
     .run();
@@ -143,7 +137,6 @@ fn listed_recipes_in_imports_are_in_load_order() {
     )
     .write("import.justfile", "bar:")
     .args(["--list", "--unsorted"])
-    .test_round_trip(false)
     .stdout(
       "
       Available recipes:
@@ -182,17 +175,41 @@ fn recipes_in_import_are_overridden_by_recipes_in_parent() {
     })
     .justfile(
       "
+        a:
+          @echo ROOT
+
         import './import.justfile'
 
         set allow-duplicate-recipes
-
-        a:
-          @echo ROOT
       ",
     )
-    .test_round_trip(false)
     .arg("a")
     .stdout("ROOT\n")
+    .run();
+}
+
+#[test]
+fn variables_in_import_are_overridden_by_variables_in_parent() {
+  Test::new()
+    .tree(tree! {
+      "import.justfile": "
+    f := 'foo'
+    ",
+    })
+    .justfile(
+      "
+      f := 'bar'
+
+      import './import.justfile'
+
+      set allow-duplicate-variables
+
+      a:
+        @echo {{f}}
+    ",
+    )
+    .arg("a")
+    .stdout("bar\n")
     .run();
 }
 
@@ -206,7 +223,6 @@ fn import_paths_beginning_with_tilde_are_expanded_to_homdir() {
         import '~/mod.just'
       ",
     )
-    .test_round_trip(false)
     .arg("foo")
     .stdout("FOOBAR\n")
     .env("HOME", "foobar")
@@ -222,7 +238,6 @@ fn imports_dump_correctly() {
         import './import.justfile'
       ",
     )
-    .test_round_trip(false)
     .arg("--dump")
     .stdout("import './import.justfile'\n")
     .run();
@@ -237,7 +252,6 @@ fn optional_imports_dump_correctly() {
         import? './import.justfile'
       ",
     )
-    .test_round_trip(false)
     .arg("--dump")
     .stdout("import? './import.justfile'\n")
     .run();
@@ -253,7 +267,6 @@ fn imports_in_root_run_in_justfile_directory() {
         import 'foo/import.justfile'
       ",
     )
-    .test_round_trip(false)
     .arg("bar")
     .stdout("BAZ")
     .run();
@@ -266,8 +279,6 @@ fn imports_in_submodules_run_in_submodule_directory() {
     .write("foo/mod.just", "import 'import.just'")
     .write("foo/import.just", "bar:\n @cat baz")
     .write("foo/baz", "BAZ")
-    .test_round_trip(false)
-    .arg("--unstable")
     .arg("foo")
     .arg("bar")
     .stdout("BAZ")
@@ -280,7 +291,6 @@ fn nested_import_paths_are_relative_to_containing_submodule() {
     .justfile("import 'foo/import.just'")
     .write("foo/import.just", "import 'bar.just'")
     .write("foo/bar.just", "bar:\n @echo BAR")
-    .test_round_trip(false)
     .arg("bar")
     .stdout("BAR\n")
     .run();
@@ -293,8 +303,6 @@ fn recipes_in_nested_imports_run_in_parent_module() {
     .write("foo/import.just", "import 'bar/import.just'")
     .write("foo/bar/import.just", "bar:\n @cat baz")
     .write("baz", "BAZ")
-    .test_round_trip(false)
-    .arg("--unstable")
     .arg("bar")
     .stdout("BAZ")
     .run();
@@ -313,8 +321,90 @@ fn shebang_recipes_in_imports_in_root_run_in_justfile_directory() {
         import 'foo/import.justfile'
       ",
     )
-    .test_round_trip(false)
     .arg("bar")
     .stdout("BAZ")
+    .run();
+}
+
+#[test]
+fn recipes_imported_in_root_run_in_command_line_provided_working_directory() {
+  Test::new()
+    .write("subdir/b.justfile", "@b:\n  cat baz")
+    .write("subdir/a.justfile", "import 'b.justfile'\n@a: b\n  cat baz")
+    .write("baz", "BAZ")
+    .args([
+      "--working-directory",
+      ".",
+      "--justfile",
+      "subdir/a.justfile",
+    ])
+    .stdout("BAZBAZ")
+    .run();
+}
+
+#[test]
+fn reused_import_are_allowed() {
+  Test::new()
+    .justfile(
+      "
+      import 'a'
+      import 'b'
+
+      bar:
+    ",
+    )
+    .tree(tree! {
+      a: "import 'c'",
+      b: "import 'c'",
+      c: "",
+    })
+    .run();
+}
+
+#[test]
+fn multiply_imported_items_do_not_conflict() {
+  Test::new()
+    .justfile(
+      "
+      import 'a.just'
+      import 'a.just'
+      foo: bar
+    ",
+    )
+    .write(
+      "a.just",
+      "
+x := 'y'
+
+@bar:
+  echo hello
+",
+    )
+    .stdout("hello\n")
+    .run();
+}
+
+#[test]
+fn nested_multiply_imported_items_do_not_conflict() {
+  Test::new()
+    .justfile(
+      "
+      import 'a.just'
+      import 'b.just'
+      foo: bar
+    ",
+    )
+    .write("a.just", "import 'c.just'")
+    .write("b.just", "import 'c.just'")
+    .write(
+      "c.just",
+      "
+x := 'y'
+
+@bar:
+  echo hello
+",
+    )
+    .stdout("hello\n")
     .run();
 }

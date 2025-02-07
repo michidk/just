@@ -1,7 +1,4 @@
-use {
-  super::*,
-  std::process::{ExitStatus, Stdio},
-};
+use super::*;
 
 /// Return a `Error::Signal` if the process was terminated by a signal,
 /// otherwise return an `Error::UnknownFailure`
@@ -22,14 +19,14 @@ fn error_from_signal(recipe: &str, line_number: Option<usize>, exit_status: Exit
 /// A recipe, e.g. `foo: bar baz`
 #[derive(PartialEq, Debug, Clone, Serialize)]
 pub(crate) struct Recipe<'src, D = Dependency<'src>> {
-  pub(crate) attributes: BTreeSet<Attribute<'src>>,
+  pub(crate) attributes: AttributeSet<'src>,
   pub(crate) body: Vec<Line<'src>>,
   pub(crate) dependencies: Vec<D>,
+  pub(crate) doc: Option<String>,
   #[serde(skip)]
-  pub(crate) depth: u32,
-  pub(crate) doc: Option<&'src str>,
+  pub(crate) file_depth: u32,
   #[serde(skip)]
-  pub(crate) file_path: PathBuf,
+  pub(crate) import_offsets: Vec<usize>,
   pub(crate) name: Name<'src>,
   pub(crate) namepath: Namepath<'src>,
   pub(crate) parameters: Vec<Parameter<'src>>,
@@ -37,8 +34,6 @@ pub(crate) struct Recipe<'src, D = Dependency<'src>> {
   pub(crate) private: bool,
   pub(crate) quiet: bool,
   pub(crate) shebang: bool,
-  #[serde(skip)]
-  pub(crate) working_directory: PathBuf,
 }
 
 impl<'src, D> Recipe<'src, D> {
@@ -71,20 +66,20 @@ impl<'src, D> Recipe<'src, D> {
   }
 
   pub(crate) fn confirm(&self) -> RunResult<'src, bool> {
-    for attribute in &self.attributes {
-      if let Attribute::Confirm(prompt) = attribute {
-        if let Some(prompt) = prompt {
-          eprint!("{} ", prompt.cooked);
-        } else {
-          eprint!("Run recipe `{}`? ", self.name);
-        }
-        let mut line = String::new();
-        std::io::stdin()
-          .read_line(&mut line)
-          .map_err(|io_error| Error::GetConfirmation { io_error })?;
-        let line = line.trim().to_lowercase();
-        return Ok(line == "y" || line == "yes");
+    if let Some(Attribute::Confirm(ref prompt)) =
+      self.attributes.get(AttributeDiscriminant::Confirm)
+    {
+      if let Some(prompt) = prompt {
+        eprint!("{} ", prompt.cooked);
+      } else {
+        eprint!("Run recipe `{}`? ", self.name);
       }
+      let mut line = String::new();
+      std::io::stdin()
+        .read_line(&mut line)
+        .map_err(|io_error| Error::GetConfirmation { io_error })?;
+      let line = line.trim().to_lowercase();
+      return Ok(line == "y" || line == "yes");
     }
     Ok(true)
   }
@@ -102,86 +97,111 @@ impl<'src, D> Recipe<'src, D> {
   }
 
   pub(crate) fn is_public(&self) -> bool {
-    !self.private && !self.attributes.contains(&Attribute::Private)
+    !self.private && !self.attributes.contains(AttributeDiscriminant::Private)
+  }
+
+  pub(crate) fn is_script(&self) -> bool {
+    self.shebang
+  }
+
+  pub(crate) fn takes_positional_arguments(&self, settings: &Settings) -> bool {
+    settings.positional_arguments
+      || self
+        .attributes
+        .contains(AttributeDiscriminant::PositionalArguments)
   }
 
   pub(crate) fn change_directory(&self) -> bool {
-    !self.attributes.contains(&Attribute::NoCd)
+    !self.attributes.contains(AttributeDiscriminant::NoCd)
   }
 
   pub(crate) fn enabled(&self) -> bool {
-    let windows = self.attributes.contains(&Attribute::Windows);
-    let linux = self.attributes.contains(&Attribute::Linux);
-    let macos = self.attributes.contains(&Attribute::Macos);
-    let unix = self.attributes.contains(&Attribute::Unix);
+    let linux = self.attributes.contains(AttributeDiscriminant::Linux);
+    let macos = self.attributes.contains(AttributeDiscriminant::Macos);
+    let openbsd = self.attributes.contains(AttributeDiscriminant::Openbsd);
+    let unix = self.attributes.contains(AttributeDiscriminant::Unix);
+    let windows = self.attributes.contains(AttributeDiscriminant::Windows);
 
-    (!windows && !linux && !macos && !unix)
-      || (cfg!(target_os = "windows") && windows)
+    (!windows && !linux && !macos && !openbsd && !unix)
       || (cfg!(target_os = "linux") && (linux || unix))
       || (cfg!(target_os = "macos") && (macos || unix))
-      || (cfg!(windows) && windows)
+      || (cfg!(target_os = "openbsd") && (openbsd || unix))
+      || (cfg!(target_os = "windows") && windows)
       || (cfg!(unix) && unix)
+      || (cfg!(windows) && windows)
   }
 
-  fn print_exit_message(&self) -> bool {
-    !self.attributes.contains(&Attribute::NoExitMessage)
-  }
-
-  fn working_directory<'a>(&'a self, search: &'a Search) -> Option<&Path> {
-    if self.change_directory() {
-      Some(if self.depth > 0 {
-        &self.working_directory
-      } else {
-        &search.working_directory
-      })
+  fn print_exit_message(&self, settings: &Settings) -> bool {
+    if self.attributes.contains(AttributeDiscriminant::ExitMessage) {
+      true
+    } else if settings.no_exit_message {
+      false
     } else {
-      None
+      !self
+        .attributes
+        .contains(AttributeDiscriminant::NoExitMessage)
     }
   }
 
+  fn working_directory<'a>(&'a self, context: &'a ExecutionContext) -> Option<PathBuf> {
+    if !self.change_directory() {
+      return None;
+    }
+
+    let working_directory = context.working_directory();
+
+    for attribute in &self.attributes {
+      if let Attribute::WorkingDirectory(dir) = attribute {
+        return Some(working_directory.join(&dir.cooked));
+      }
+    }
+
+    Some(working_directory)
+  }
+
   fn no_quiet(&self) -> bool {
-    self.attributes.contains(&Attribute::NoQuiet)
+    self.attributes.contains(AttributeDiscriminant::NoQuiet)
   }
 
   pub(crate) fn run<'run>(
     &self,
-    context: &RecipeContext<'src, 'run>,
-    dotenv: &BTreeMap<String, String>,
-    scope: Scope<'src, 'run>,
-    search: &'run Search,
+    context: &ExecutionContext<'src, 'run>,
+    scope: &Scope<'src, 'run>,
     positional: &[String],
+    is_dependency: bool,
   ) -> RunResult<'src, ()> {
-    let config = &context.config;
+    let color = context.config.color.stderr().banner();
+    let prefix = color.prefix();
+    let suffix = color.suffix();
 
-    if config.verbosity.loquacious() {
-      let color = config.color.stderr().banner();
-      eprintln!(
-        "{}===> Running recipe `{}`...{}",
-        color.prefix(),
-        self.name,
-        color.suffix()
-      );
+    if context.config.verbosity.loquacious() {
+      eprintln!("{prefix}===> Running recipe `{}`...{suffix}", self.name);
     }
 
-    let evaluator =
-      Evaluator::recipe_evaluator(context.config, dotenv, &scope, context.settings, search);
+    if context.config.explain {
+      if let Some(doc) = self.doc() {
+        eprintln!("{prefix}#### {doc}{suffix}");
+      }
+    }
 
-    if self.shebang {
-      self.run_shebang(context, dotenv, &scope, positional, config, evaluator)
+    let evaluator = Evaluator::new(context, is_dependency, scope);
+
+    if self.is_script() {
+      self.run_script(context, scope, positional, evaluator)
     } else {
-      self.run_linewise(context, dotenv, &scope, positional, config, evaluator)
+      self.run_linewise(context, scope, positional, evaluator)
     }
   }
 
   fn run_linewise<'run>(
     &self,
-    context: &RecipeContext<'src, 'run>,
-    dotenv: &BTreeMap<String, String>,
+    context: &ExecutionContext<'src, 'run>,
     scope: &Scope<'src, 'run>,
     positional: &[String],
-    config: &Config,
     mut evaluator: Evaluator<'src, 'run>,
   ) -> RunResult<'src, ()> {
+    let config = &context.config;
+
     let mut lines = self.body.iter().peekable();
     let mut line_number = self.line_number() + 1;
     loop {
@@ -190,11 +210,11 @@ impl<'src, D> Recipe<'src, D> {
       }
       let mut evaluated = String::new();
       let mut continued = false;
-      let quiet_line = lines.peek().map_or(false, |line| line.is_quiet());
-      let infallible_line = lines.peek().map_or(false, |line| line.is_infallible());
+      let quiet_line = lines.peek().is_some_and(|line| line.is_quiet());
+      let infallible_line = lines.peek().is_some_and(|line| line.is_infallible());
 
-      let comment_line =
-        context.settings.ignore_comments && lines.peek().map_or(false, |line| line.is_comment());
+      let comment_line = context.module.settings.ignore_comments
+        && lines.peek().is_some_and(|line| line.is_comment());
 
       loop {
         if lines.peek().is_none() {
@@ -230,30 +250,42 @@ impl<'src, D> Recipe<'src, D> {
       if config.dry_run
         || config.verbosity.loquacious()
         || !((quiet_line ^ self.quiet)
-          || (context.settings.quiet && !self.no_quiet())
+          || (context.module.settings.quiet && !self.no_quiet())
           || config.verbosity.quiet())
       {
-        let color = if config.highlight {
-          config.color.command(config.command_color)
-        } else {
-          config.color
-        };
-        eprintln!("{}", color.stderr().paint(command));
+        let color = config
+          .highlight
+          .then(|| config.color.command(config.command_color))
+          .unwrap_or(config.color)
+          .stderr();
+
+        if config.timestamp {
+          eprint!(
+            "[{}] ",
+            color.paint(
+              &chrono::Local::now()
+                .format(&config.timestamp_format)
+                .to_string()
+            ),
+          );
+        }
+
+        eprintln!("{}", color.paint(command));
       }
 
       if config.dry_run {
         continue;
       }
 
-      let mut cmd = context.settings.shell_command(config);
+      let mut cmd = context.module.settings.shell_command(config);
 
-      if let Some(working_directory) = self.working_directory(context.search) {
+      if let Some(working_directory) = self.working_directory(context) {
         cmd.current_dir(working_directory);
       }
 
       cmd.arg(command);
 
-      if context.settings.positional_arguments {
+      if self.takes_positional_arguments(&context.module.settings) {
         cmd.arg(self.name.lexeme());
         cmd.args(positional);
       }
@@ -263,7 +295,12 @@ impl<'src, D> Recipe<'src, D> {
         cmd.stdout(Stdio::null());
       }
 
-      cmd.export(context.settings, dotenv, scope);
+      cmd.export(
+        &context.module.settings,
+        context.dotenv,
+        scope,
+        &context.module.unexports,
+      );
 
       match InterruptHandler::guard(|| cmd.status()) {
         Ok(exit_status) => {
@@ -273,7 +310,7 @@ impl<'src, D> Recipe<'src, D> {
                 recipe: self.name(),
                 line_number: Some(line_number),
                 code,
-                print_message: self.print_exit_message(),
+                print_message: self.print_exit_message(&context.module.settings),
               });
             }
           } else {
@@ -294,23 +331,30 @@ impl<'src, D> Recipe<'src, D> {
     }
   }
 
-  pub(crate) fn run_shebang<'run>(
+  pub(crate) fn run_script<'run>(
     &self,
-    context: &RecipeContext<'src, 'run>,
-    dotenv: &BTreeMap<String, String>,
+    context: &ExecutionContext<'src, 'run>,
     scope: &Scope<'src, 'run>,
     positional: &[String],
-    config: &Config,
     mut evaluator: Evaluator<'src, 'run>,
   ) -> RunResult<'src, ()> {
-    let mut evaluated_lines = vec![];
+    let config = &context.config;
+
+    let mut evaluated_lines = Vec::new();
     for line in &self.body {
       evaluated_lines.push(evaluator.evaluate_line(line, false)?);
     }
 
     if config.verbosity.loud() && (config.dry_run || self.quiet) {
       for line in &evaluated_lines {
-        eprintln!("{line}");
+        eprintln!(
+          "{}",
+          config
+            .color
+            .command(config.command_color)
+            .stderr()
+            .paint(line)
+        );
       }
     }
 
@@ -318,81 +362,86 @@ impl<'src, D> Recipe<'src, D> {
       return Ok(());
     }
 
-    let shebang_line = evaluated_lines.first().ok_or_else(|| Error::Internal {
-      message: "evaluated_lines was empty".to_owned(),
-    })?;
+    let executor = if let Some(Attribute::Script(interpreter)) =
+      self.attributes.get(AttributeDiscriminant::Script)
+    {
+      Executor::Command(
+        interpreter
+          .as_ref()
+          .or(context.module.settings.script_interpreter.as_ref())
+          .unwrap_or_else(|| Interpreter::default_script_interpreter()),
+      )
+    } else {
+      let line = evaluated_lines
+        .first()
+        .ok_or_else(|| Error::internal("evaluated_lines was empty"))?;
 
-    let shebang = Shebang::new(shebang_line).ok_or_else(|| Error::Internal {
-      message: format!("bad shebang line: {shebang_line}"),
-    })?;
+      let shebang =
+        Shebang::new(line).ok_or_else(|| Error::internal(format!("bad shebang line: {line}")))?;
+
+      Executor::Shebang(shebang)
+    };
 
     let mut tempdir_builder = tempfile::Builder::new();
     tempdir_builder.prefix("just-");
-    let tempdir = match &context.settings.tempdir {
+    let tempdir = match &context.module.settings.tempdir {
       Some(tempdir) => tempdir_builder.tempdir_in(context.search.working_directory.join(tempdir)),
-      None => tempdir_builder.tempdir(),
+      None => {
+        if let Some(runtime_dir) = dirs::runtime_dir() {
+          let path = runtime_dir.join("just");
+          fs::create_dir_all(&path).map_err(|io_error| Error::RuntimeDirIo {
+            io_error,
+            path: path.clone(),
+          })?;
+          tempdir_builder.tempdir_in(path)
+        } else {
+          tempdir_builder.tempdir()
+        }
+      }
     }
-    .map_err(|error| Error::TmpdirIo {
+    .map_err(|error| Error::TempdirIo {
       recipe: self.name(),
       io_error: error,
     })?;
     let mut path = tempdir.path().to_path_buf();
-    path.push(shebang.script_filename(self.name()));
 
-    {
-      let mut f = fs::File::create(&path).map_err(|error| Error::TmpdirIo {
-        recipe: self.name(),
-        io_error: error,
-      })?;
-      let mut text = String::new();
-
-      if shebang.include_shebang_line() {
-        text += &evaluated_lines[0];
+    let extension = self.attributes.iter().find_map(|attribute| {
+      if let Attribute::Extension(extension) = attribute {
+        Some(extension.cooked.as_str())
       } else {
-        text += "\n";
+        None
       }
+    });
 
-      text += "\n";
-      // add blank lines so that lines in the generated script have the same line
-      // number as the corresponding lines in the justfile
-      for _ in 1..(self.line_number() + 2) {
-        text += "\n";
-      }
-      for line in &evaluated_lines[1..] {
-        text += line;
-        text += "\n";
-      }
+    path.push(executor.script_filename(self.name(), extension));
 
-      if config.verbosity.grandiloquent() {
-        eprintln!("{}", config.color.doc().stderr().paint(&text));
-      }
+    let script = executor.script(self, &evaluated_lines);
 
-      f.write_all(text.as_bytes())
-        .map_err(|error| Error::TmpdirIo {
-          recipe: self.name(),
-          io_error: error,
-        })?;
+    if config.verbosity.grandiloquent() {
+      eprintln!("{}", config.color.doc().stderr().paint(&script));
     }
 
-    // make script executable
-    Platform::set_execute_permission(&path).map_err(|error| Error::TmpdirIo {
+    fs::write(&path, script).map_err(|error| Error::TempdirIo {
       recipe: self.name(),
       io_error: error,
     })?;
 
-    // create command to run script
-    let mut command =
-      Platform::make_shebang_command(&path, self.working_directory(context.search), shebang)
-        .map_err(|output_error| Error::Cygpath {
-          recipe: self.name(),
-          output_error,
-        })?;
+    let mut command = executor.command(
+      &path,
+      self.name(),
+      self.working_directory(context).as_deref(),
+    )?;
 
-    if context.settings.positional_arguments {
+    if self.takes_positional_arguments(&context.module.settings) {
       command.args(positional);
     }
 
-    command.export(context.settings, dotenv, scope);
+    command.export(
+      &context.module.settings,
+      context.dotenv,
+      scope,
+      &context.module.unexports,
+    );
 
     // run it!
     match InterruptHandler::guard(|| command.status()) {
@@ -406,25 +455,54 @@ impl<'src, D> Recipe<'src, D> {
               recipe: self.name(),
               line_number: None,
               code,
-              print_message: self.print_exit_message(),
+              print_message: self.print_exit_message(&context.module.settings),
             })
           }
         },
       ),
-      Err(io_error) => Err(Error::Shebang {
-        recipe: self.name(),
-        command: shebang.interpreter.to_owned(),
-        argument: shebang.argument.map(String::from),
-        io_error,
-      }),
+      Err(io_error) => Err(executor.error(io_error, self.name())),
     }
+  }
+
+  pub(crate) fn groups(&self) -> BTreeSet<String> {
+    self
+      .attributes
+      .iter()
+      .filter_map(|attribute| {
+        if let Attribute::Group(group) = attribute {
+          Some(group.cooked.clone())
+        } else {
+          None
+        }
+      })
+      .collect()
+  }
+
+  pub(crate) fn doc(&self) -> Option<&str> {
+    for attribute in &self.attributes {
+      if let Attribute::Doc(doc) = attribute {
+        return doc.as_ref().map(|s| s.cooked.as_ref());
+      }
+    }
+
+    self.doc.as_deref()
+  }
+
+  pub(crate) fn subsequents(&self) -> impl Iterator<Item = &D> {
+    self.dependencies.iter().skip(self.priors)
   }
 }
 
-impl<'src, D: Display> ColorDisplay for Recipe<'src, D> {
-  fn fmt(&self, f: &mut Formatter, color: Color) -> Result<(), fmt::Error> {
-    if let Some(doc) = self.doc {
-      writeln!(f, "# {doc}")?;
+impl<D: Display> ColorDisplay for Recipe<'_, D> {
+  fn fmt(&self, f: &mut Formatter, color: Color) -> fmt::Result {
+    if !self
+      .attributes
+      .iter()
+      .any(|attribute| matches!(attribute, Attribute::Doc(_)))
+    {
+      if let Some(doc) = &self.doc {
+        writeln!(f, "# {doc}")?;
+      }
     }
 
     for attribute in &self.attributes {
