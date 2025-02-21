@@ -11,9 +11,30 @@ test! {
   args: ("--list"),
   stdout: "
     Available recipes:
-        foo
-        f   # alias for `foo`
+        foo # [alias: f]
   ",
+}
+
+#[test]
+fn alias_listing_with_doc() {
+  Test::new()
+    .justfile(
+      "
+        # foo command
+        foo:
+          echo foo
+
+        alias f := foo
+      ",
+    )
+    .arg("--list")
+    .stdout(
+      "
+      Available recipes:
+          foo # foo command [alias: f]
+    ",
+    )
+    .run();
 }
 
 test! {
@@ -22,9 +43,7 @@ test! {
   args: ("--list"),
   stdout: "
     Available recipes:
-        foo
-        f   # alias for `foo`
-        fo  # alias for `foo`
+        foo # [aliases: f, fo]
   ",
 }
 
@@ -34,8 +53,7 @@ test! {
   args: ("--list"),
   stdout: "
     Available recipes:
-        foo PARAM='foo'
-        f PARAM='foo'   # alias for `foo`
+        foo PARAM='foo' # [alias: f]
   ",
 }
 
@@ -515,7 +533,7 @@ recipe arg:
 
 test! {
   name:     dry_run,
-  justfile: r#"
+  justfile: r"
 var := `echo stderr 1>&2; echo backtick`
 
 command:
@@ -527,7 +545,7 @@ shebang:
   #!/bin/sh
   touch /this/is/not/a/file
   {{var}}
-  echo {{`echo shebang interpolation`}}"#,
+  echo {{`echo shebang interpolation`}}",
   args:     ("--dry-run", "shebang", "command"),
   stdout:   "",
   stderr:   "#!/bin/sh
@@ -542,7 +560,7 @@ echo `echo command interpolation`
 
 test! {
   name:     line_error_spacing,
-  justfile: r#"
+  justfile: r"
 
 
 
@@ -553,7 +571,7 @@ test! {
 
 
 ^^^
-"#,
+",
   stdout:   "",
   stderr:   "error: Unknown start of token:
   ——▶ justfile:10:1
@@ -594,7 +612,7 @@ foo A B:
     ",
   args:     ("foo", "ONE", "TWO", "THREE"),
   stdout:   "",
-  stderr:   "error: Justfile does not contain recipe `THREE`.\n",
+  stderr:   "error: Justfile does not contain recipe `THREE`\n",
   status:   EXIT_FAILURE,
 }
 
@@ -618,7 +636,7 @@ foo A B='B':
     ",
   args:     ("foo", "ONE", "TWO", "THREE"),
   stdout:   "",
-  stderr:   "error: Justfile does not contain recipe `THREE`.\n",
+  stderr:   "error: Justfile does not contain recipe `THREE`\n",
   status:   EXIT_FAILURE,
 }
 
@@ -643,7 +661,7 @@ test! {
   justfile: "hello:",
   args:     ("foo"),
   stdout:   "",
-  stderr:   "error: Justfile does not contain recipe `foo`.\n",
+  stderr:   "error: Justfile does not contain recipe `foo`\n",
   status:   EXIT_FAILURE,
 }
 
@@ -652,7 +670,7 @@ test! {
   justfile: "hello:",
   args:     ("foo", "bar"),
   stdout:   "",
-  stderr:   "error: Justfile does not contain recipes `foo` or `bar`.\n",
+  stderr:   "error: Justfile does not contain recipe `foo`\n",
   status:   EXIT_FAILURE,
 }
 
@@ -707,10 +725,10 @@ Recipe `recipe` failed on line 2 with exit code 100\u{1b}[0m\n",
 
 test! {
   name:     dump,
-  justfile: r#"
+  justfile: r"
 # this recipe does something
 recipe a b +d:
- @exit 100"#,
+ @exit 100",
   args:     ("--dump"),
   stdout:   "# this recipe does something
 recipe a b +d:
@@ -824,10 +842,10 @@ hello baz arg='XYZ"	':
 
 test! {
   name:     supply_use_default,
-  justfile: r#"
+  justfile: r"
 hello a b='B' c='C':
   echo {{a}} {{b}} {{c}}
-"#,
+",
   args:     ("hello", "0", "1"),
   stdout:   "0 1 C\n",
   stderr:   "echo 0 1 C\n",
@@ -835,10 +853,10 @@ hello a b='B' c='C':
 
 test! {
   name:     supply_defaults,
-  justfile: r#"
+  justfile: r"
 hello a b='B' c='C':
   echo {{a}} {{b}} {{c}}
-"#,
+",
   args:     ("hello", "0", "1", "2"),
   stdout:   "0 1 2\n",
   stderr:   "echo 0 1 2\n",
@@ -884,7 +902,7 @@ _private-recipe:
   args:     ("--list"),
   stdout:   r#"
     Available recipes:
-        a Z="\t z"          # something else
+        a Z="\t z"           # something else
         hello a b='B	' c='C' # this does a thing
   "#,
 }
@@ -902,7 +920,7 @@ x a b='B	' c='C':
   echo {{a}} {{b}} {{c}}
 
 # something else
-this-recipe-is-very-very-very-important Z="\t z":
+this-recipe-is-very-very-very-very-very-very-very-very-important Z="\t z":
 
 # this recipe will not appear
 _private-recipe:
@@ -911,82 +929,80 @@ _private-recipe:
   stdout:   r#"
     Available recipes:
         hello a b='B	' c='C' # this does a thing
-        this-recipe-is-very-very-very-important Z="\t z" # something else
+        this-recipe-is-very-very-very-very-very-very-very-very-important Z="\t z" # something else
         x a b='B	' c='C'     # this does another thing
   "#,
 }
 
 test! {
   name:     list_sorted,
-  justfile: r#"
+  justfile: r"
 alias c := b
 b:
 a:
-"#,
+",
   args:     ("--list"),
-  stdout:   r#"
+  stdout:   r"
     Available recipes:
         a
-        b
-        c # alias for `b`
-  "#,
+        b # [alias: c]
+  ",
 }
 
 test! {
   name:     list_unsorted,
-  justfile: r#"
+  justfile: r"
 alias c := b
 b:
 a:
-"#,
+",
   args:     ("--list", "--unsorted"),
-  stdout:   r#"
+  stdout:   r"
     Available recipes:
-        b
-        c # alias for `b`
+        b # [alias: c]
         a
-  "#,
+  ",
 }
 
 test! {
   name:     list_heading,
-  justfile: r#"
+  justfile: r"
 a:
 b:
-"#,
+",
   args:     ("--list", "--list-heading", "Cool stuff…\n"),
-  stdout:   r#"
+  stdout:   r"
     Cool stuff…
         a
         b
-  "#,
+  ",
 }
 
 test! {
   name:     list_prefix,
-  justfile: r#"
+  justfile: r"
 a:
 b:
-"#,
+",
   args:     ("--list", "--list-prefix", "····"),
-  stdout:   r#"
+  stdout:   r"
     Available recipes:
     ····a
     ····b
-  "#,
+  ",
 }
 
 test! {
   name:     list_empty_prefix_and_heading,
-  justfile: r#"
+  justfile: r"
 a:
 b:
-"#,
+",
   args:     ("--list", "--list-heading", "", "--list-prefix", ""),
-  stdout:   r#"
+  stdout:   r"
     a
     b
-  "#,
+  ",
 }
 
 test! {
@@ -999,7 +1015,7 @@ a Z="\t z":
 "#,
   args:     ("hell"),
   stdout:   "",
-  stderr:   "error: Justfile does not contain recipe `hell`.\nDid you mean `hello`?\n",
+  stderr:   "error: Justfile does not contain recipe `hell`\nDid you mean `hello`?\n",
   status:   EXIT_FAILURE,
 }
 
@@ -1041,117 +1057,58 @@ foo:
 
 test! {
   name: infallible_command,
-  justfile: r#"
+  justfile: r"
 infallible:
   -exit 101
-"#,
+",
   stderr: "exit 101\n",
   status: EXIT_SUCCESS,
 }
 
 test! {
   name: infallible_with_failing,
-  justfile: r#"
+  justfile: r"
 infallible:
   -exit 101
   exit 202
-"#,
-  stderr: r#"exit 101
+",
+  stderr: r"exit 101
 exit 202
 error: Recipe `infallible` failed on line 3 with exit code 202
-"#,
+",
   status: 202,
 }
 
 test! {
   name:     quiet_recipe,
-  justfile: r#"
+  justfile: r"
 @quiet:
   # a
   # b
   @echo c
-"#,
+",
   stdout:   "c\n",
   stderr:   "echo c\n",
 }
 
 test! {
   name:     quiet_shebang_recipe,
-  justfile: r#"
+  justfile: r"
 @quiet:
   #!/bin/sh
   echo hello
-"#,
+",
   stdout:   "hello\n",
   stderr:   "#!/bin/sh\necho hello\n",
 }
 
-#[cfg(not(windows))]
-test! {
-  name:     shebang_line_numbers,
-  justfile: r#"
-    quiet:
-      #!/usr/bin/env cat
-
-      a
-
-      b
-
-
-      c
-
-
-  "#,
-  stdout:   "
-    #!/usr/bin/env cat
-
-
-    a
-
-    b
-
-
-    c
-  ",
-}
-
-#[cfg(windows)]
-test! {
-  name:     shebang_line_numbers,
-  justfile: r#"
-    quiet:
-      #!/usr/bin/env cat
-
-      a
-
-      b
-
-
-      c
-
-
-  "#,
-  stdout:   "
-
-
-
-
-    a
-
-    b
-
-
-    c
-  ",
-}
-
 test! {
   name:     complex_dependencies,
-  justfile: r#"
+  justfile: r"
 a: b
 b:
 c: b a
-"#,
+",
   args:     ("b"),
   stdout:   "",
 }
@@ -1590,84 +1547,6 @@ echo:
 }
 
 test! {
-   name:     dotenv_variable_in_recipe,
-   justfile: "
-#
-set dotenv-load
-
-echo:
-  echo $DOTENV_KEY
- ",
-   stdout:   "dotenv-value\n",
-   stderr:   "echo $DOTENV_KEY\n",
-}
-
-test! {
-   name:     dotenv_variable_in_backtick,
-   justfile: "
-#
-set dotenv-load
-X:=`echo $DOTENV_KEY`
-echo:
-  echo {{X}}
- ",
-   stdout:   "dotenv-value\n",
-   stderr:   "echo dotenv-value\n",
-}
-test! {
-   name:     dotenv_variable_in_function_in_recipe,
-   justfile: "
-#
-set dotenv-load
-echo:
-  echo {{env_var_or_default('DOTENV_KEY', 'foo')}}
-  echo {{env_var('DOTENV_KEY')}}
- ",
-   stdout:   "dotenv-value\ndotenv-value\n",
-   stderr:   "echo dotenv-value\necho dotenv-value\n",
-}
-
-test! {
-   name:     dotenv_variable_in_function_in_backtick,
-   justfile: "
-#
-set dotenv-load
-X:=env_var_or_default('DOTENV_KEY', 'foo')
-Y:=env_var('DOTENV_KEY')
-echo:
-  echo {{X}}
-  echo {{Y}}
- ",
-   stdout:   "dotenv-value\ndotenv-value\n",
-   stderr:   "echo dotenv-value\necho dotenv-value\n",
-}
-
-test! {
-   name:     no_dotenv,
-   justfile: "
-#
-X:=env_var_or_default('DOTENV_KEY', 'DEFAULT')
-echo:
-  echo {{X}}
- ",
-   args:     ("--no-dotenv"),
-   stdout:   "DEFAULT\n",
-   stderr:   "echo DEFAULT\n",
-}
-
-test! {
-   name:     dotenv_env_var_override,
-   justfile: "
-#
-echo:
-  echo $DOTENV_KEY
- ",
-   env:      {"DOTENV_KEY": "not-the-dotenv-value",},
-   stdout:   "not-the-dotenv-value\n",
-   stderr:   "echo $DOTENV_KEY\n",
-}
-
-test! {
    name:     invalid_escape_sequence_message,
    justfile: r#"
 X := "\'"
@@ -1688,12 +1567,12 @@ test! {
      foo x=bar:
    ",
    stdout:   "",
-   stderr:   r#"error: Variable `bar` not defined
+   stderr:   r"error: Variable `bar` not defined
  ——▶ justfile:1:7
   │
 1 │ foo x=bar:
   │       ^^^
-"#,
+",
    status:   EXIT_FAILURE,
 }
 
@@ -1703,12 +1582,12 @@ test! {
 foo x=bar():
 ",
    stdout:   "",
-   stderr:   r#"error: Call to unknown function `bar`
+   stderr:   r"error: Call to unknown function `bar`
  ——▶ justfile:1:7
   │
 1 │ foo x=bar():
   │       ^^^
-"#,
+",
    status:   EXIT_FAILURE,
 }
 
@@ -1759,13 +1638,13 @@ test! {
     foo:
       echo {{
   ",
-  stderr:   r#"
+  stderr:   r"
     error: Unterminated interpolation
      ——▶ justfile:2:8
       │
     2 │   echo {{
       │        ^^
-  "#,
+  ",
   status:   EXIT_FAILURE,
 }
 
@@ -1775,13 +1654,13 @@ test! {
     foo:
       echo {{
   ",
-  stderr:   r#"
+  stderr:   r"
     error: Unterminated interpolation
      ——▶ justfile:2:8
       │
     2 │   echo {{
       │        ^^
-  "#,
+  ",
   status:   EXIT_FAILURE,
 }
 
@@ -1790,13 +1669,13 @@ test! {
   justfile: "
 assembly_source_files = %(wildcard src/arch/$(arch)/*.s)
 ",
-  stderr:   r#"
+  stderr:   r"
     error: Unknown start of token:
      ——▶ justfile:1:25
       │
     1 │ assembly_source_files = %(wildcard src/arch/$(arch)/*.s)
       │                         ^
-  "#,
+  ",
    status:   EXIT_FAILURE,
 }
 
@@ -2075,26 +1954,6 @@ test! {
   args: (),
   stdout: "BAR\n",
   stderr: "echo BAR\n",
-  shell: false,
-}
-
-test! {
-  name: parameter_cross_reference_error,
-  justfile: "
-    foo:
-
-    bar a b=a:
-  ",
-  args: (),
-  stdout: "",
-  stderr: "
-    error: Variable `a` not defined
-     ——▶ justfile:3:9
-      │
-    3 │ bar a b=a:
-      │         ^
-  ",
-  status: EXIT_FAILURE,
   shell: false,
 }
 

@@ -48,7 +48,7 @@ a Z="\t z":
 "#,
   args:     ("--show", "hell"),
   stdout:   "",
-  stderr:   "error: Justfile does not contain recipe `hell`.\nDid you mean `hello`?\n",
+  stderr:   "error: Justfile does not contain recipe `hell`\nDid you mean `hello`?\n",
   status:   EXIT_FAILURE,
 }
 
@@ -65,7 +65,7 @@ a Z="\t z":
   args:     ("--show", "fo"),
   stdout:   "",
   stderr:   "
-    error: Justfile does not contain recipe `fo`.
+    error: Justfile does not contain recipe `fo`
     Did you mean `foo`, an alias for `hello`?
   ",
   status:   EXIT_FAILURE,
@@ -81,7 +81,7 @@ a Z="\t z":
 "#,
   args:     ("--show", "hell"),
   stdout:   "",
-  stderr:   "error: Justfile does not contain recipe `hell`.\n",
+  stderr:   "error: Justfile does not contain recipe `hell`\n",
   status:   EXIT_FAILURE,
 }
 
@@ -97,6 +97,43 @@ a Z="\t z":
 "#,
   args:     ("--show", "fooooooo"),
   stdout:   "",
-  stderr:   "error: Justfile does not contain recipe `fooooooo`.\n",
+  stderr:   "error: Justfile does not contain recipe `fooooooo`\n",
   status:   EXIT_FAILURE,
+}
+
+#[test]
+fn show_recipe_at_path() {
+  Test::new()
+    .write("foo.just", "bar:\n @echo MODULE")
+    .justfile(
+      "
+        mod foo
+      ",
+    )
+    .args(["--show", "foo::bar"])
+    .stdout("bar:\n    @echo MODULE\n")
+    .run();
+}
+
+#[test]
+fn show_invalid_path() {
+  Test::new()
+    .args(["--show", "$hello"])
+    .stderr("error: Invalid module path `$hello`\n")
+    .status(1)
+    .run();
+}
+
+#[test]
+fn show_space_separated_path() {
+  Test::new()
+    .write("foo.just", "bar:\n @echo MODULE")
+    .justfile(
+      "
+        mod foo
+      ",
+    )
+    .args(["--show", "foo bar"])
+    .stdout("bar:\n    @echo MODULE\n")
+    .run();
 }

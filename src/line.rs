@@ -5,18 +5,21 @@ use super::*;
 #[serde(transparent)]
 pub(crate) struct Line<'src> {
   pub(crate) fragments: Vec<Fragment<'src>>,
+  #[serde(skip)]
+  pub(crate) number: usize,
 }
 
-impl<'src> Line<'src> {
-  pub(crate) fn is_empty(&self) -> bool {
-    self.fragments.is_empty()
+impl Line<'_> {
+  fn first(&self) -> Option<&str> {
+    if let Fragment::Text { token } = self.fragments.first()? {
+      Some(token.lexeme())
+    } else {
+      None
+    }
   }
 
   pub(crate) fn is_comment(&self) -> bool {
-    matches!(
-      self.fragments.first(),
-      Some(Fragment::Text { token }) if token.lexeme().starts_with('#'),
-    )
+    self.first().is_some_and(|text| text.starts_with('#'))
   }
 
   pub(crate) fn is_continuation(&self) -> bool {
@@ -26,26 +29,23 @@ impl<'src> Line<'src> {
     )
   }
 
-  pub(crate) fn is_shebang(&self) -> bool {
-    matches!(
-      self.fragments.first(),
-      Some(Fragment::Text { token }) if token.lexeme().starts_with("#!"),
-    )
-  }
-
-  pub(crate) fn is_quiet(&self) -> bool {
-    matches!(
-      self.fragments.first(),
-      Some(Fragment::Text { token })
-        if token.lexeme().starts_with('@') || token.lexeme().starts_with("-@"),
-    )
+  pub(crate) fn is_empty(&self) -> bool {
+    self.fragments.is_empty()
   }
 
   pub(crate) fn is_infallible(&self) -> bool {
-    matches!(
-      self.fragments.first(),
-      Some(Fragment::Text { token })
-        if token.lexeme().starts_with('-') || token.lexeme().starts_with("@-"),
-    )
+    self
+      .first()
+      .is_some_and(|text| text.starts_with('-') || text.starts_with("@-"))
+  }
+
+  pub(crate) fn is_quiet(&self) -> bool {
+    self
+      .first()
+      .is_some_and(|text| text.starts_with('@') || text.starts_with("-@"))
+  }
+
+  pub(crate) fn is_shebang(&self) -> bool {
+    self.first().is_some_and(|text| text.starts_with("#!"))
   }
 }

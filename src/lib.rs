@@ -1,50 +1,126 @@
-#![deny(clippy::all, clippy::pedantic)]
-#![allow(
-  clippy::enum_glob_use,
-  clippy::let_underscore_untyped,
-  clippy::needless_pass_by_value,
-  clippy::similar_names,
-  clippy::struct_excessive_bools,
-  clippy::struct_field_names,
-  clippy::too_many_arguments,
-  clippy::too_many_lines,
-  clippy::unnecessary_wraps,
-  clippy::wildcard_imports,
-  overlapping_range_endpoints
-)]
+//! `just` is primarily used as a command-line binary, but does provide a
+//! limited public library interface.
+//!
+//! Please keep in mind that there are no semantic version guarantees for the
+//! library interface. It may break or change at any time.
 
 pub(crate) use {
   crate::{
-    alias::Alias, analyzer::Analyzer, assignment::Assignment,
-    assignment_resolver::AssignmentResolver, ast::Ast, attribute::Attribute, binding::Binding,
-    color::Color, color_display::ColorDisplay, command_ext::CommandExt, compilation::Compilation,
-    compile_error::CompileError, compile_error_kind::CompileErrorKind, compiler::Compiler,
-    conditional_operator::ConditionalOperator, config::Config, config_error::ConfigError,
-    count::Count, delimiter::Delimiter, dependency::Dependency, dump_format::DumpFormat,
-    enclosure::Enclosure, error::Error, evaluator::Evaluator, expression::Expression,
-    fragment::Fragment, function::Function, function_context::FunctionContext,
-    interrupt_guard::InterruptGuard, interrupt_handler::InterruptHandler, item::Item,
-    justfile::Justfile, keyed::Keyed, keyword::Keyword, lexer::Lexer, line::Line, list::List,
-    load_dotenv::load_dotenv, loader::Loader, name::Name, namepath::Namepath, ordinal::Ordinal,
-    output::output, output_error::OutputError, parameter::Parameter, parameter_kind::ParameterKind,
-    parser::Parser, platform::Platform, platform_interface::PlatformInterface, position::Position,
-    positional::Positional, ran::Ran, range_ext::RangeExt, recipe::Recipe,
-    recipe_context::RecipeContext, recipe_resolver::RecipeResolver, scope::Scope, search::Search,
-    search_config::SearchConfig, search_error::SearchError, set::Set, setting::Setting,
-    settings::Settings, shebang::Shebang, shell::Shell, show_whitespace::ShowWhitespace,
-    source::Source, string_kind::StringKind, string_literal::StringLiteral, subcommand::Subcommand,
-    suggestion::Suggestion, table::Table, thunk::Thunk, token::Token, token_kind::TokenKind,
-    unresolved_dependency::UnresolvedDependency, unresolved_recipe::UnresolvedRecipe,
-    use_color::UseColor, variables::Variables, verbosity::Verbosity, warning::Warning,
+    alias::Alias,
+    alias_style::AliasStyle,
+    analyzer::Analyzer,
+    argument_parser::ArgumentParser,
+    assignment::Assignment,
+    assignment_resolver::AssignmentResolver,
+    ast::Ast,
+    attribute::{Attribute, AttributeDiscriminant},
+    attribute_set::AttributeSet,
+    binding::Binding,
+    color::Color,
+    color_display::ColorDisplay,
+    command_color::CommandColor,
+    command_ext::CommandExt,
+    compilation::Compilation,
+    compile_error::CompileError,
+    compile_error_kind::CompileErrorKind,
+    compiler::Compiler,
+    condition::Condition,
+    conditional_operator::ConditionalOperator,
+    config::Config,
+    config_error::ConfigError,
+    constants::constants,
+    count::Count,
+    delimiter::Delimiter,
+    dependency::Dependency,
+    dump_format::DumpFormat,
+    enclosure::Enclosure,
+    error::Error,
+    evaluator::Evaluator,
+    execution_context::ExecutionContext,
+    executor::Executor,
+    expression::Expression,
+    fragment::Fragment,
+    function::Function,
+    interpreter::Interpreter,
+    interrupt_guard::InterruptGuard,
+    interrupt_handler::InterruptHandler,
+    item::Item,
+    justfile::Justfile,
+    keyed::Keyed,
+    keyword::Keyword,
+    lexer::Lexer,
+    line::Line,
+    list::List,
+    load_dotenv::load_dotenv,
+    loader::Loader,
+    module_path::ModulePath,
+    name::Name,
+    namepath::Namepath,
+    ordinal::Ordinal,
+    output::output,
+    output_error::OutputError,
+    parameter::Parameter,
+    parameter_kind::ParameterKind,
+    parser::Parser,
+    platform::Platform,
+    platform_interface::PlatformInterface,
+    position::Position,
+    positional::Positional,
+    ran::Ran,
+    range_ext::RangeExt,
+    recipe::Recipe,
+    recipe_resolver::RecipeResolver,
+    recipe_signature::RecipeSignature,
+    scope::Scope,
+    search::Search,
+    search_config::SearchConfig,
+    search_error::SearchError,
+    set::Set,
+    setting::Setting,
+    settings::Settings,
+    shebang::Shebang,
+    show_whitespace::ShowWhitespace,
+    source::Source,
+    string_delimiter::StringDelimiter,
+    string_kind::StringKind,
+    string_literal::StringLiteral,
+    subcommand::Subcommand,
+    suggestion::Suggestion,
+    table::Table,
+    thunk::Thunk,
+    token::Token,
+    token_kind::TokenKind,
+    unresolved_dependency::UnresolvedDependency,
+    unresolved_recipe::UnresolvedRecipe,
+    unstable_feature::UnstableFeature,
+    use_color::UseColor,
+    variables::Variables,
+    verbosity::Verbosity,
+    warning::Warning,
+    which::which,
   },
+  camino::Utf8Path,
+  clap::ValueEnum,
+  derive_where::derive_where,
+  edit_distance::edit_distance,
+  lexiclean::Lexiclean,
+  libc::EXIT_FAILURE,
+  once_cell::sync::Lazy,
+  regex::Regex,
+  serde::{
+    ser::{SerializeMap, SerializeSeq},
+    Deserialize, Serialize, Serializer,
+  },
+  snafu::{ResultExt, Snafu},
   std::{
+    borrow::Cow,
     cmp,
-    collections::{BTreeMap, BTreeSet, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     env,
-    ffi::{OsStr, OsString},
+    ffi::OsString,
     fmt::{self, Debug, Display, Formatter},
     fs,
-    io::{self, Cursor, Write},
+    io::{self, Read, Seek, Write},
     iter::{self, FromIterator},
     mem,
     ops::Deref,
@@ -53,26 +129,13 @@ pub(crate) use {
     process::{self, Command, ExitStatus, Stdio},
     rc::Rc,
     str::{self, Chars},
-    sync::{Mutex, MutexGuard},
+    sync::{Mutex, MutexGuard, OnceLock},
     vec,
   },
-  {
-    camino::Utf8Path,
-    derivative::Derivative,
-    edit_distance::edit_distance,
-    lexiclean::Lexiclean,
-    libc::EXIT_FAILURE,
-    log::{info, warn},
-    regex::Regex,
-    serde::{
-      ser::{SerializeMap, SerializeSeq},
-      Serialize, Serializer,
-    },
-    snafu::{ResultExt, Snafu},
-    strum::{Display, EnumString, IntoStaticStr},
-    typed_arena::Arena,
-    unicode_width::{UnicodeWidthChar, UnicodeWidthStr},
-  },
+  strum::{Display, EnumDiscriminants, EnumString, IntoStaticStr},
+  tempfile::tempfile,
+  typed_arena::Arena,
+  unicode_width::{UnicodeWidthChar, UnicodeWidthStr},
 };
 
 #[cfg(test)]
@@ -80,14 +143,18 @@ pub(crate) use crate::{node::Node, tree::Tree};
 
 pub use crate::run::run;
 
+#[doc(hidden)]
+use request::Request;
+
 // Used in integration tests.
 #[doc(hidden)]
-pub use unindent::unindent;
+pub use {request::Response, unindent::unindent};
 
-pub(crate) type CompileResult<'a, T = ()> = Result<T, CompileError<'a>>;
-pub(crate) type ConfigResult<T> = Result<T, ConfigError>;
-pub(crate) type RunResult<'a, T = ()> = Result<T, Error<'a>>;
-pub(crate) type SearchResult<T> = Result<T, SearchError>;
+type CompileResult<'a, T = ()> = Result<T, CompileError<'a>>;
+type ConfigResult<T> = Result<T, ConfigError>;
+type FunctionResult = Result<String, String>;
+type RunResult<'a, T = ()> = Result<T, Error<'a>>;
+type SearchResult<T> = Result<T, SearchError>;
 
 #[cfg(test)]
 #[macro_use]
@@ -109,24 +176,34 @@ pub mod fuzzing;
 #[doc(hidden)]
 pub mod summary;
 
+// Used for testing with the `--request` subcommand.
+#[doc(hidden)]
+pub mod request;
+
 mod alias;
+mod alias_style;
 mod analyzer;
+mod argument_parser;
 mod assignment;
 mod assignment_resolver;
 mod ast;
 mod attribute;
+mod attribute_set;
 mod binding;
 mod color;
 mod color_display;
+mod command_color;
 mod command_ext;
 mod compilation;
 mod compile_error;
 mod compile_error_kind;
 mod compiler;
 mod completions;
+mod condition;
 mod conditional_operator;
 mod config;
 mod config_error;
+mod constants;
 mod count;
 mod delimiter;
 mod dependency;
@@ -134,10 +211,12 @@ mod dump_format;
 mod enclosure;
 mod error;
 mod evaluator;
+mod execution_context;
+mod executor;
 mod expression;
 mod fragment;
 mod function;
-mod function_context;
+mod interpreter;
 mod interrupt_guard;
 mod interrupt_handler;
 mod item;
@@ -149,6 +228,7 @@ mod line;
 mod list;
 mod load_dotenv;
 mod loader;
+mod module_path;
 mod name;
 mod namepath;
 mod ordinal;
@@ -164,8 +244,8 @@ mod positional;
 mod ran;
 mod range_ext;
 mod recipe;
-mod recipe_context;
 mod recipe_resolver;
+mod recipe_signature;
 mod run;
 mod scope;
 mod search;
@@ -175,9 +255,9 @@ mod set;
 mod setting;
 mod settings;
 mod shebang;
-mod shell;
 mod show_whitespace;
 mod source;
+mod string_delimiter;
 mod string_kind;
 mod string_literal;
 mod subcommand;
@@ -189,7 +269,9 @@ mod token_kind;
 mod unindent;
 mod unresolved_dependency;
 mod unresolved_recipe;
+mod unstable_feature;
 mod use_color;
 mod variables;
 mod verbosity;
 mod warning;
+mod which;

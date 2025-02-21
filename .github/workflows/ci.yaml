@@ -12,21 +12,15 @@ defaults:
   run:
     shell: bash
 
+env:
+  RUSTFLAGS: --deny warnings
+
 jobs:
   lint:
     runs-on: ubuntu-latest
 
-    env:
-      RUSTFLAGS: --deny warnings
-
     steps:
     - uses: actions/checkout@v4
-
-    - name: Install Rust Toolchain Components
-      uses: actions-rs/toolchain@v1
-      with:
-        components: clippy, rustfmt
-        toolchain: stable
 
     - uses: Swatinem/rust-cache@v2
 
@@ -36,41 +30,27 @@ jobs:
     - name: Format
       run: cargo fmt --all -- --check
 
-    - name: Completion Scripts
-      run: |
-        ./bin/generate-completions
-        git diff --no-ext-diff --quiet --exit-code
-        ./tests/completions/just.bash
-
-    - name: Check for Forbidden Words
+    - name: Install Dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install ripgrep
-        ./bin/forbid
+        sudo apt-get install ripgrep shellcheck
+
+    - name: Check for Forbidden Words
+      run: ./bin/forbid
+
+    - name: Check Install Script
+      run: shellcheck www/install.sh
 
   pages:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-
-    env:
-      RUSTFLAGS: --deny warnings
 
     steps:
     - uses: actions/checkout@v4
 
-    - name: Install Rust Toolchain Components
-      uses: actions-rs/toolchain@v1
-      with:
-        profile: minimal
-        toolchain: stable
-
     - uses: Swatinem/rust-cache@v2
 
     - name: Install `mdbook`
-      uses: peaceiris/actions-mdbook@v1
-      with:
-        mdbook-version: latest
+      run: cargo install mdbook
 
     - name: Install `mdbook-linkcheck`
       run: |
@@ -87,13 +67,6 @@ jobs:
         mdbook build book/en
         mdbook build book/zh
 
-    - name: Deploy Pages
-      uses: peaceiris/actions-gh-pages@v3
-      if: github.ref == 'refs/heads/master'
-      with:
-        github_token: ${{secrets.GITHUB_TOKEN}}
-        publish_branch: gh-pages
-        publish_dir: www
   test:
     strategy:
       matrix:
@@ -103,9 +76,6 @@ jobs:
         - windows-latest
 
     runs-on: ${{matrix.os}}
-
-    env:
-      RUSTFLAGS: --deny warnings
 
     steps:
     - uses: actions/checkout@v4
@@ -118,13 +88,6 @@ jobs:
         icacls C:\Windows\System32\bash.exe /grant administrators:F
         del C:\Windows\System32\bash.exe
 
-    - name: Install Rust Toolchain Components
-      uses: actions-rs/toolchain@v1
-      with:
-        components: clippy, rustfmt
-        override: true
-        toolchain: stable
-
     - uses: Swatinem/rust-cache@v2
 
     - name: Test
@@ -132,5 +95,5 @@ jobs:
 
     - name: Test install.sh
       run: |
-        bash www/install.sh --to /tmp --tag 1.0.0
+        bash www/install.sh --to /tmp --tag 1.25.0
         /tmp/just --version

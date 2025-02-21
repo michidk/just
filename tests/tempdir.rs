@@ -1,10 +1,18 @@
 use super::*;
 
 pub(crate) fn tempdir() -> TempDir {
-  tempfile::Builder::new()
-    .prefix("just-test-tempdir")
-    .tempdir()
-    .expect("failed to create temporary directory")
+  let mut builder = tempfile::Builder::new();
+
+  builder.prefix("just-test-tempdir");
+
+  if let Some(runtime_dir) = dirs::runtime_dir() {
+    let path = runtime_dir.join("just");
+    fs::create_dir_all(&path).unwrap();
+    builder.tempdir_in(path)
+  } else {
+    builder.tempdir()
+  }
+  .expect("failed to create temporary directory")
 }
 
 #[test]
@@ -26,7 +34,6 @@ fn test_tempdir_is_set() {
     .current_dir("foo")
     .stdout(if cfg!(windows) {
       "
-
 
 
 

@@ -39,29 +39,29 @@ test! {
       echo XYZ
   ",
   args: ("--command"),
-  stderr: &format!("
-    error: The argument '--command <COMMAND>' requires a value but none was supplied
+  stderr: "
+    error: a value is required for '--command <COMMAND>...' but none was supplied
 
-    USAGE:
-        just{EXE_SUFFIX} --color <COLOR> --dump-format <FORMAT> --shell <SHELL> \
-        <--changelog|--choose|--command <COMMAND>|--completions <SHELL>|--dump|--edit|\
-        --evaluate|--fmt|--init|--list|--show <RECIPE>|--summary|--variables>
-
-    For more information try --help
-  "),
-  status: EXIT_FAILURE,
+    For more information, try '--help'.
+  ",
+  status: 2,
 }
 
-test! {
-  name: env_is_loaded,
-  justfile: "
-    set dotenv-load
+#[test]
+fn env_is_loaded() {
+  Test::new()
+    .justfile(
+      "
+        set dotenv-load
 
-    x:
-      echo XYZ
-  ",
-  args: ("--command", "sh", "-c", "printf $DOTENV_KEY"),
-  stdout: "dotenv-value",
+        x:
+          echo XYZ
+      ",
+    )
+    .args(["--command", "sh", "-c", "printf $DOTENV_KEY"])
+    .write(".env", "DOTENV_KEY=dotenv-value")
+    .stdout("dotenv-value")
+    .run();
 }
 
 test! {

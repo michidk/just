@@ -21,7 +21,7 @@ NEWLINE             = \n|\r\n
 RAW_STRING          = '[^']*'
 INDENTED_RAW_STRING = '''[^(''')]*'''
 STRING              = "[^"]*" # also processes \n \r \t \" \\ escapes
-INDENTED_STRING     = """[^("""]*""" # also processes \n \r \t \" \\ escapes
+INDENTED_STRING     = """[^(""")]*""" # also processes \n \r \t \" \\ escapes
 LINE_PREFIX         = @-|-@|@|-
 TEXT                = recipe text, only matches in a recipe body
 ```
@@ -50,44 +50,62 @@ item          : alias
               | import
               | module
               | recipe
-              | setting
+              | set
 
 eol           : NEWLINE
               | COMMENT NEWLINE
 
-alias         : 'alias' NAME ':=' NAME
+alias         : 'alias' NAME ':=' NAME eol
 
 assignment    : NAME ':=' expression eol
 
 export        : 'export' assignment
 
-setting       : 'set' 'allow-duplicate-recipes' boolean?
-              | 'set' 'dotenv-filename' ':=' string
-              | 'set' 'dotenv-load' boolean?
-              | 'set' 'dotenv-path' ':=' string
-              | 'set' 'export' boolean?
-              | 'set' 'fallback' boolean?
-              | 'set' 'ignore-comments' boolean?
-              | 'set' 'positional-arguments' boolean?
-              | 'set' 'quiet' boolean?
-              | 'set' 'shell' ':=' '[' string (',' string)* ','? ']'
-              | 'set' 'tempdir ':=' string
-              | 'set' 'windows-powershell' boolean?
-              | 'set' 'windows-shell' ':=' '[' string (',' string)* ','? ']'
+set           : 'set' setting eol
 
-import        : 'import' '?'? string?
-
-module        : 'mod' '?'? NAME string?
+setting       : 'allow-duplicate-recipes' boolean?
+              | 'allow-duplicate-variables' boolean?
+              | 'dotenv-filename' ':=' string
+              | 'dotenv-load' boolean?
+              | 'dotenv-path' ':=' string
+              | 'dotenv-required' boolean?
+              | 'export' boolean?
+              | 'fallback' boolean?
+              | 'ignore-comments' boolean?
+              | 'positional-arguments' boolean?
+              | 'script-interpreter' ':=' string_list
+              | 'quiet' boolean?
+              | 'shell' ':=' string_list
+              | 'tempdir' ':=' string
+              | 'unstable' boolean?
+              | 'windows-powershell' boolean?
+              | 'windows-shell' ':=' string_list
+              | 'working-directory' ':=' string
 
 boolean       : ':=' ('true' | 'false')
 
-expression    : 'if' condition '{' expression '}' 'else' '{' expression '}'
+string_list   : '[' string (',' string)* ','? ']'
+
+import        : 'import' '?'? string? eol
+
+module        : 'mod' '?'? NAME string? eol
+
+expression    : disjunct || expression
+              | disjunct
+
+disjunct      : conjunct && disjunct
+              | conjunct
+
+conjunct      : 'if' condition '{' expression '}' 'else' '{' expression '}'
+              | 'assert' '(' condition ',' expression ')'
+              | '/' expression
               | value '/' expression
               | value '+' expression
               | value
 
 condition     : expression '==' expression
               | expression '!=' expression
+              | expression '=~' expression
 
 value         : NAME '(' sequence? ')'
               | BACKTICK
@@ -96,15 +114,15 @@ value         : NAME '(' sequence? ')'
               | string
               | '(' expression ')'
 
-string        : STRING
-              | INDENTED_STRING
-              | RAW_STRING
-              | INDENTED_RAW_STRING
+string        : 'x'? STRING
+              | 'x'? INDENTED_STRING
+              | 'x'? RAW_STRING
+              | 'x'? INDENTED_RAW_STRING
 
 sequence      : expression ',' sequence
               | expression ','?
 
-recipe        : attributes* '@'? NAME parameter* variadic? ':' dependency* body?
+recipe        : attributes* '@'? NAME parameter* variadic? ':' dependencies eol body?
 
 attributes    : '[' attribute* ']' eol
 
@@ -115,6 +133,8 @@ parameter     : '$'? NAME
 
 variadic      : '*' parameter
               | '+' parameter
+
+dependencies  : dependency* ('&&' dependency+)?
 
 dependency    : NAME
               | '(' NAME expression* ')'

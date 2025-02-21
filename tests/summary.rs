@@ -65,9 +65,21 @@ fn submodule_recipes() {
         bar:
       ",
     )
-    .test_round_trip(false)
-    .arg("--unstable")
     .arg("--summary")
     .stdout("bar foo::foo foo::bar::bar foo::bar::baz::baz foo::bar::baz::biz::biz\n")
+    .run();
+}
+
+#[test]
+fn summary_implies_unstable() {
+  Test::new()
+    .write("foo.just", "foo:")
+    .justfile(
+      "
+        mod foo
+      ",
+    )
+    .arg("--summary")
+    .stdout("foo::foo\n")
     .run();
 }
