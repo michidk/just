@@ -4,14 +4,13 @@ pub(crate) struct Compiler;
 
 impl Compiler {
   pub(crate) fn compile<'src>(
-    unstable: bool,
     loader: &'src Loader,
     root: &Path,
   ) -> RunResult<'src, Compilation<'src>> {
-    let mut asts: HashMap<PathBuf, Ast> = HashMap::new();
-    let mut paths: HashMap<PathBuf, PathBuf> = HashMap::new();
-    let mut srcs: HashMap<PathBuf, &str> = HashMap::new();
+    let mut asts = HashMap::<PathBuf, Ast>::new();
     let mut loaded = Vec::new();
+    let mut paths = HashMap::<PathBuf, PathBuf>::new();
+    let mut srcs = HashMap::<PathBuf, &str>::new();
 
     let mut stack = Vec::new();
     stack.push(Source::root(root));
@@ -21,9 +20,9 @@ impl Compiler {
       loaded.push(relative.into());
       let tokens = Lexer::lex(relative, src)?;
       let mut ast = Parser::parse(
-        &current.path,
-        &current.namepath,
-        current.depth,
+        current.file_depth,
+        &current.import_offsets,
+        current.namepath.as_ref(),
         &tokens,
         &current.working_directory,
       )?;
@@ -38,29 +37,19 @@ impl Compiler {
             name,
             optional,
             relative,
+            ..
           } => {
-            if !unstable {
-              return Err(Error::Unstable {
-                message: "Modules are currently unstable.".into(),
-              });
-            }
-
             let parent = current.path.parent().unwrap();
 
-            let import = if let Some(relative) = relative {
-              let path = parent.join(Self::expand_tilde(&relative.cooked)?);
+            let relative = relative
+              .as_ref()
+              .map(|relative| Self::expand_tilde(&relative.cooked))
+              .transpose()?;
 
-              if path.is_file() {
-                Some(path)
-              } else {
-                None
-              }
-            } else {
-              Self::find_module_file(parent, *name)?
-            };
+            let import = Self::find_module_file(parent, *name, relative.as_deref())?;
 
             if let Some(import) = import {
-              if srcs.contains_key(&import) {
+              if current.file_path.contains(&import) {
                 return Err(Error::CircularImport {
                   current: current.path,
                   import,
@@ -86,14 +75,14 @@ impl Compiler {
               .lexiclean();
 
             if import.is_file() {
-              if srcs.contains_key(&import) {
+              if current.file_path.contains(&import) {
                 return Err(Error::CircularImport {
                   current: current.path,
                   import,
                 });
               }
               *absolute = Some(import.clone());
-              stack.push(current.import(import));
+              stack.push(current.import(import, path.offset));
             } else if !*optional {
               return Err(Error::MissingImportFile { path: *path });
             }
@@ -105,29 +94,73 @@ impl Compiler {
       asts.insert(current.path, ast.clone());
     }
 
-    let justfile = Analyzer::analyze(&loaded, &paths, &asts, root)?;
+    let justfile = Analyzer::analyze(&asts, None, &[], &loaded, None, &paths, root)?;
 
     Ok(Compilation {
       asts,
-      srcs,
       justfile,
       root: root.into(),
+      srcs,
     })
   }
 
-  fn find_module_file<'src>(parent: &Path, module: Name<'src>) -> RunResult<'src, Option<PathBuf>> {
-    let mut candidates = vec![format!("{module}.just"), format!("{module}/mod.just")]
-      .into_iter()
-      .filter(|path| parent.join(path).is_file())
-      .collect::<Vec<String>>();
+  fn find_module_file<'src>(
+    parent: &Path,
+    module: Name<'src>,
+    path: Option<&Path>,
+  ) -> RunResult<'src, Option<PathBuf>> {
+    let mut candidates = Vec::new();
 
-    let directory = parent.join(module.lexeme());
+    if let Some(path) = path {
+      let full = parent.join(path);
 
-    if directory.exists() {
-      let entries = fs::read_dir(&directory).map_err(|io_error| SearchError::Io {
-        io_error,
-        directory: directory.clone(),
-      })?;
+      if full.is_file() {
+        return Ok(Some(full));
+      }
+
+      candidates.push((path.join("mod.just"), true));
+
+      for name in search::JUSTFILE_NAMES {
+        candidates.push((path.join(name), false));
+      }
+    } else {
+      candidates.push((format!("{module}.just").into(), true));
+      candidates.push((format!("{module}/mod.just").into(), true));
+
+      for name in search::JUSTFILE_NAMES {
+        candidates.push((format!("{module}/{name}").into(), false));
+      }
+    }
+
+    let mut grouped = BTreeMap::<PathBuf, Vec<(PathBuf, bool)>>::new();
+
+    for (candidate, case_sensitive) in candidates {
+      let candidate = parent.join(candidate).lexiclean();
+      grouped
+        .entry(candidate.parent().unwrap().into())
+        .or_default()
+        .push((candidate, case_sensitive));
+    }
+
+    let mut found = Vec::new();
+
+    for (directory, candidates) in grouped {
+      let entries = match fs::read_dir(&directory) {
+        Ok(entries) => entries,
+        Err(io_error) => {
+          if io_error.kind() == io::ErrorKind::NotFound {
+            continue;
+          }
+
+          return Err(
+            SearchError::Io {
+              io_error,
+              directory,
+            }
+            .into(),
+          );
+        }
+      };
 
       for entry in entries {
         let entry = entry.map_err(|io_error| SearchError::Io {
@@ -136,22 +169,34 @@ impl Compiler {
         })?;
 
         if let Some(name) = entry.file_name().to_str() {
-          for justfile_name in search::JUSTFILE_NAMES {
-            if name.eq_ignore_ascii_case(justfile_name) {
-              candidates.push(format!("{module}/{name}"));
+          for (candidate, case_sensitive) in &candidates {
+            let candidate_name = candidate.file_name().unwrap().to_str().unwrap();
+
+            let eq = if *case_sensitive {
+              name == candidate_name
+            } else {
+              name.eq_ignore_ascii_case(candidate_name)
+            };
+
+            if eq {
+              found.push(candidate.parent().unwrap().join(name));
             }
           }
         }
       }
     }
 
-    match candidates.as_slice() {
-      [] => Ok(None),
-      [file] => Ok(Some(parent.join(file).lexiclean())),
-      found => Err(Error::AmbiguousModuleFile {
-        found: found.into(),
+    if found.len() > 1 {
+      found.sort();
+      Err(Error::AmbiguousModuleFile {
+        found: found
+          .into_iter()
+          .map(|found| found.strip_prefix(parent).unwrap().into())
+          .collect(),
         module,
-      }),
+      })
+    } else {
+      Ok(found.into_iter().next())
     }
   }
 
@@ -168,19 +213,13 @@ impl Compiler {
   #[cfg(test)]
   pub(crate) fn test_compile(src: &str) -> CompileResult<Justfile> {
     let tokens = Lexer::test_lex(src)?;
-    let ast = Parser::parse(
-      &PathBuf::new(),
-      &Namepath::default(),
-      0,
-      &tokens,
-      &PathBuf::new(),
-    )?;
+    let ast = Parser::parse(0, &[], None, &tokens, &PathBuf::new())?;
     let root = PathBuf::from("justfile");
     let mut asts: HashMap<PathBuf, Ast> = HashMap::new();
     asts.insert(root.clone(), ast);
     let mut paths: HashMap<PathBuf, PathBuf> = HashMap::new();
     paths.insert(root.clone(), root.clone());
-    Analyzer::analyze(&[], &paths, &asts, &root)
+    Analyzer::analyze(&asts, None, &[], &[], None, &paths, &root)
   }
 }
 
@@ -220,43 +259,108 @@ recipe_b: recipe_c
     let loader = Loader::new();
 
     let justfile_a_path = tmp.path().join("justfile");
-    let compilation = Compiler::compile(false, &loader, &justfile_a_path).unwrap();
+    let compilation = Compiler::compile(&loader, &justfile_a_path).unwrap();
 
     assert_eq!(compilation.root_src(), justfile_a);
   }
 
   #[test]
   fn recursive_includes_fail() {
-    let justfile_a = r#"
-# A comment at the top of the file
-import "./subdir/justfile_b"
-
-some_recipe: recipe_b
-    echo "some recipe"
-
-"#;
-
-    let justfile_b = r#"
-import "../justfile"
-
-recipe_b:
-    echo "recipe b"
-"#;
     let tmp = temptree! {
-        justfile: justfile_a,
-        subdir: {
-            justfile_b: justfile_b
-        }
+      justfile: "import './subdir/b'\na: b",
+      subdir: {
+        b: "import '../justfile'\nb:"
+      }
     };
 
     let loader = Loader::new();
 
     let justfile_a_path = tmp.path().join("justfile");
-    let loader_output = Compiler::compile(false, &loader, &justfile_a_path).unwrap_err();
+    let loader_output = Compiler::compile(&loader, &justfile_a_path).unwrap_err();
 
     assert_matches!(loader_output, Error::CircularImport { current, import }
-        if current == tmp.path().join("subdir").join("justfile_b").lexiclean() &&
-        import == tmp.path().join("justfile").lexiclean()
+      if current == tmp.path().join("subdir").join("b").lexiclean() &&
+      import == tmp.path().join("justfile").lexiclean()
+    );
+  }
+
+  #[test]
+  fn find_module_file() {
+    #[track_caller]
+    fn case(path: Option<&str>, files: &[&str], expected: Result<Option<&str>, &[&str]>) {
+      let module = Name {
+        token: Token {
+          column: 0,
+          kind: TokenKind::Identifier,
+          length: 3,
+          line: 0,
+          offset: 0,
+          path: Path::new(""),
+          src: "foo",
+        },
+      };
+
+      let tempdir = tempfile::tempdir().unwrap();
+
+      for file in files {
+        if let Some(parent) = Path::new(file).parent() {
+          fs::create_dir_all(tempdir.path().join(parent)).unwrap();
+        }
+
+        fs::write(tempdir.path().join(file), "").unwrap();
+      }
+
+      let actual = Compiler::find_module_file(tempdir.path(), module, path.map(Path::new));
+
+      match expected {
+        Err(expected) => match actual.unwrap_err() {
+          Error::AmbiguousModuleFile { found, .. } => {
+            assert_eq!(
+              found,
+              expected
+                .iter()
+                .map(|expected| expected.replace('/', std::path::MAIN_SEPARATOR_STR).into())
+                .collect::<Vec<PathBuf>>()
+            );
+          }
+          _ => panic!("unexpected error"),
+        },
+        Ok(Some(expected)) => assert_eq!(
+          actual.unwrap().unwrap(),
+          tempdir
+            .path()
+            .join(expected.replace('/', std::path::MAIN_SEPARATOR_STR))
+        ),
+        Ok(None) => assert_eq!(actual.unwrap(), None),
+      }
+    }
+
+    case(None, &["foo.just"], Ok(Some("foo.just")));
+    case(None, &["FOO.just"], Ok(None));
+    case(None, &["foo/mod.just"], Ok(Some("foo/mod.just")));
+    case(None, &["foo/MOD.just"], Ok(None));
+    case(None, &["foo/justfile"], Ok(Some("foo/justfile")));
+    case(None, &["foo/JUSTFILE"], Ok(Some("foo/JUSTFILE")));
+    case(None, &["foo/.justfile"], Ok(Some("foo/.justfile")));
+    case(None, &["foo/.JUSTFILE"], Ok(Some("foo/.JUSTFILE")));
+    case(
+      None,
+      &["foo/.justfile", "foo/justfile"],
+      Err(&["foo/.justfile", "foo/justfile"]),
+    );
+    case(None, &["foo/JUSTFILE"], Ok(Some("foo/JUSTFILE")));
+
+    case(Some("bar"), &["bar"], Ok(Some("bar")));
+    case(Some("bar"), &["bar/mod.just"], Ok(Some("bar/mod.just")));
+    case(Some("bar"), &["bar/justfile"], Ok(Some("bar/justfile")));
+    case(Some("bar"), &["bar/JUSTFILE"], Ok(Some("bar/JUSTFILE")));
+    case(Some("bar"), &["bar/.justfile"], Ok(Some("bar/.justfile")));
+    case(Some("bar"), &["bar/.JUSTFILE"], Ok(Some("bar/.JUSTFILE")));
+
+    case(
+      Some("bar"),
+      &["bar/justfile", "bar/mod.just"],
+      Err(&["bar/justfile", "bar/mod.just"]),
     );
   }
 }

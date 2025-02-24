@@ -10,7 +10,7 @@ pub(crate) fn config(args: &[&str]) -> Config {
 
   let app = Config::app();
 
-  let matches = app.get_matches_from_safe(args).unwrap();
+  let matches = app.try_get_matches_from(args).unwrap();
 
   Config::from_matches(&matches).unwrap()
 }
@@ -59,14 +59,8 @@ pub(crate) fn analysis_error(
 ) {
   let tokens = Lexer::test_lex(src).expect("Lexing failed in parse test...");
 
-  let ast = Parser::parse(
-    &PathBuf::new(),
-    &Namepath::default(),
-    0,
-    &tokens,
-    &PathBuf::new(),
-  )
-  .expect("Parsing failed in analysis test...");
+  let ast = Parser::parse(0, &[], None, &tokens, &PathBuf::new())
+    .expect("Parsing failed in analysis test...");
 
   let root = PathBuf::from("justfile");
   let mut asts: HashMap<PathBuf, Ast> = HashMap::new();
@@ -75,7 +69,7 @@ pub(crate) fn analysis_error(
   let mut paths: HashMap<PathBuf, PathBuf> = HashMap::new();
   paths.insert("justfile".into(), "justfile".into());
 
-  match Analyzer::analyze(&[], &paths, &asts, &root) {
+  match Analyzer::analyze(&asts, None, &[], &[], None, &paths, &root) {
     Ok(_) => panic!("Analysis unexpectedly succeeded"),
     Err(have) => {
       let want = CompileError {
@@ -88,7 +82,7 @@ pub(crate) fn analysis_error(
           length,
           path: "justfile".as_ref(),
         },
-        kind: Box::new(kind),
+        kind: kind.into(),
       };
       assert_eq!(have, want);
     }
@@ -129,7 +123,7 @@ macro_rules! run_error {
 }
 
 macro_rules! assert_matches {
-  ($expression:expr, $( $pattern:pat_param )|+ $( if $guard:expr )?) => {
+  ($expression:expr, $( $pattern:pat_param )|+ $( if $guard:expr )? $(,)?) => {
     match $expression {
       $( $pattern )|+ $( if $guard )? => {}
       left => panic!(

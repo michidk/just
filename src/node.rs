@@ -18,10 +18,10 @@ impl<'src> Node<'src> for Ast<'src> {
 impl<'src> Node<'src> for Item<'src> {
   fn tree(&self) -> Tree<'src> {
     match self {
-      Item::Alias(alias) => alias.tree(),
-      Item::Assignment(assignment) => assignment.tree(),
-      Item::Comment(comment) => comment.tree(),
-      Item::Import {
+      Self::Alias(alias) => alias.tree(),
+      Self::Assignment(assignment) => assignment.tree(),
+      Self::Comment(comment) => comment.tree(),
+      Self::Import {
         relative, optional, ..
       } => {
         let mut tree = Tree::atom("import");
@@ -32,7 +32,7 @@ impl<'src> Node<'src> for Item<'src> {
 
         tree.push(format!("{relative}"))
       }
-      Item::Module {
+      Self::Module {
         name,
         optional,
         relative,
@@ -52,8 +52,13 @@ impl<'src> Node<'src> for Item<'src> {
 
         tree
       }
-      Item::Recipe(recipe) => recipe.tree(),
-      Item::Set(set) => set.tree(),
+      Self::Recipe(recipe) => recipe.tree(),
+      Self::Set(set) => set.tree(),
+      Self::Unexport { name } => {
+        let mut unexport = Tree::atom(Keyword::Unexport.lexeme());
+        unexport.push_mut(name.lexeme().replace('-', "_"));
+        unexport
+      }
     }
   }
 }
@@ -83,27 +88,19 @@ impl<'src> Node<'src> for Assignment<'src> {
 impl<'src> Node<'src> for Expression<'src> {
   fn tree(&self) -> Tree<'src> {
     match self {
-      Expression::Concatenation { lhs, rhs } => Tree::atom("+").push(lhs.tree()).push(rhs.tree()),
-      Expression::Conditional {
-        lhs,
-        rhs,
-        then,
-        otherwise,
-        operator,
-      } => {
-        let mut tree = Tree::atom(Keyword::If.lexeme());
-        tree.push_mut(lhs.tree());
-        tree.push_mut(operator.to_string());
-        tree.push_mut(rhs.tree());
-        tree.push_mut(then.tree());
-        tree.push_mut(otherwise.tree());
-        tree
-      }
-      Expression::Call { thunk } => {
+      Self::And { lhs, rhs } => Tree::atom("&&").push(lhs.tree()).push(rhs.tree()),
+      Self::Assert {
+        condition: Condition { lhs, rhs, operator },
+        error,
+      } => Tree::atom(Keyword::Assert.lexeme())
+        .push(lhs.tree())
+        .push(operator.to_string())
+        .push(rhs.tree())
+        .push(error.tree()),
+      Self::Backtick { contents, .. } => Tree::atom("backtick").push(Tree::string(contents)),
+      Self::Call { thunk } => {
         use Thunk::*;
-
         let mut tree = Tree::atom("call");
-
         match thunk {
           Nullary { name, .. } => tree.push_mut(name.lexeme()),
           Unary { name, arg, .. } => {
@@ -117,6 +114,17 @@ impl<'src> Node<'src> for Expression<'src> {
             tree.push_mut(a.tree());
             if let Some(b) = b.as_ref() {
               tree.push_mut(b.tree());
+            }
+          }
+          UnaryPlus {
+            name,
+            args: (a, rest),
+            ..
+          } => {
+            tree.push_mut(name.lexeme());
+            tree.push_mut(a.tree());
+            for arg in rest {
+              tree.push_mut(arg.tree());
             }
           }
           Binary {
@@ -149,20 +157,33 @@ impl<'src> Node<'src> for Expression<'src> {
             tree.push_mut(c.tree());
           }
         }
-
         tree
       }
-      Expression::Variable { name } => Tree::atom(name.lexeme()),
-      Expression::StringLiteral {
-        string_literal: StringLiteral { cooked, .. },
-      } => Tree::string(cooked),
-      Expression::Backtick { contents, .. } => Tree::atom("backtick").push(Tree::string(contents)),
-      Expression::Group { contents } => Tree::List(vec![contents.tree()]),
-      Expression::Join { lhs: None, rhs } => Tree::atom("/").push(rhs.tree()),
-      Expression::Join {
+      Self::Concatenation { lhs, rhs } => Tree::atom("+").push(lhs.tree()).push(rhs.tree()),
+      Self::Conditional {
+        condition: Condition { lhs, rhs, operator },
+        then,
+        otherwise,
+      } => {
+        let mut tree = Tree::atom(Keyword::If.lexeme());
+        tree.push_mut(lhs.tree());
+        tree.push_mut(operator.to_string());
+        tree.push_mut(rhs.tree());
+        tree.push_mut(then.tree());
+        tree.push_mut(otherwise.tree());
+        tree
+      }
+      Self::Group { contents } => Tree::List(vec![contents.tree()]),
+      Self::Join { lhs: None, rhs } => Tree::atom("/").push(rhs.tree()),
+      Self::Join {
         lhs: Some(lhs),
         rhs,
       } => Tree::atom("/").push(lhs.tree()).push(rhs.tree()),
+      Self::Or { lhs, rhs } => Tree::atom("||").push(lhs.tree()).push(rhs.tree()),
+      Self::StringLiteral {
+        string_literal: StringLiteral { cooked, .. },
+      } => Tree::string(cooked),
+      Self::Variable { name } => Tree::atom(name.lexeme()),
     }
   }
 }
@@ -176,7 +197,7 @@ impl<'src> Node<'src> for UnresolvedRecipe<'src> {
       t.push_mut("quiet");
     }
 
-    if let Some(doc) = self.doc {
+    if let Some(doc) = &self.doc {
       t.push_mut(Tree::string(doc));
     }
 
@@ -252,8 +273,8 @@ impl<'src> Node<'src> for Line<'src> {
 impl<'src> Node<'src> for Fragment<'src> {
   fn tree(&self) -> Tree<'src> {
     match self {
-      Fragment::Text { token } => Tree::string(token.lexeme()),
-      Fragment::Interpolation { expression } => Tree::List(vec![expression.tree()]),
+      Self::Text { token } => Tree::string(token.lexeme()),
+      Self::Interpolation { expression } => Tree::List(vec![expression.tree()]),
     }
   }
 }
@@ -265,24 +286,32 @@ impl<'src> Node<'src> for Set<'src> {
 
     match &self.value {
       Setting::AllowDuplicateRecipes(value)
+      | Setting::AllowDuplicateVariables(value)
       | Setting::DotenvLoad(value)
+      | Setting::DotenvRequired(value)
       | Setting::Export(value)
       | Setting::Fallback(value)
+      | Setting::NoExitMessage(value)
       | Setting::PositionalArguments(value)
       | Setting::Quiet(value)
+      | Setting::Unstable(value)
       | Setting::WindowsPowerShell(value)
       | Setting::IgnoreComments(value) => {
         set.push_mut(value.to_string());
       }
-      Setting::Shell(Shell { command, arguments })
-      | Setting::WindowsShell(Shell { command, arguments }) => {
+      Setting::ScriptInterpreter(Interpreter { command, arguments })
+      | Setting::Shell(Interpreter { command, arguments })
+      | Setting::WindowsShell(Interpreter { command, arguments }) => {
         set.push_mut(Tree::string(&command.cooked));
         for argument in arguments {
           set.push_mut(Tree::string(&argument.cooked));
         }
       }
-      Setting::DotenvFilename(value) | Setting::DotenvPath(value) | Setting::Tempdir(value) => {
-        set.push_mut(Tree::string(value));
+      Setting::DotenvFilename(value)
+      | Setting::DotenvPath(value)
+      | Setting::Tempdir(value)
+      | Setting::WorkingDirectory(value) => {
+        set.push_mut(Tree::string(&value.cooked));
       }
     }
 

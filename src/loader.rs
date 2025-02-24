@@ -7,7 +7,7 @@ pub(crate) struct Loader {
 
 impl Loader {
   pub(crate) fn new() -> Self {
-    Loader {
+    Self {
       srcs: Arena::new(),
       paths: Arena::new(),
     }
@@ -17,17 +17,13 @@ impl Loader {
     &'src self,
     root: &Path,
     path: &Path,
-  ) -> RunResult<(&'src Path, &'src str)> {
+  ) -> RunResult<'src, (&'src Path, &'src str)> {
     let src = fs::read_to_string(path).map_err(|io_error| Error::Load {
-      path: path.to_owned(),
+      path: path.into(),
       io_error,
     })?;
 
-    let relative = if let Ok(path) = path.strip_prefix(root.parent().unwrap()) {
-      path
-    } else {
-      path
-    };
+    let relative = path.strip_prefix(root.parent().unwrap()).unwrap_or(path);
 
     Ok((self.paths.alloc(relative.into()), self.srcs.alloc(src)))
   }
