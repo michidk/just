@@ -5,14 +5,14 @@ use super::*;
 /// are performed by the `Analyzer`, which produces a `Justfile` from an `Ast`.
 #[derive(Debug, Clone)]
 pub(crate) struct Ast<'src> {
-  /// Items in the justfile
   pub(crate) items: Vec<Item<'src>>,
-  /// Non-fatal warnings encountered during parsing
+  pub(crate) unstable_features: BTreeSet<UnstableFeature>,
   pub(crate) warnings: Vec<Warning>,
+  pub(crate) working_directory: PathBuf,
 }
 
-impl<'src> Display for Ast<'src> {
-  fn fmt(&self, f: &mut Formatter) -> Result<(), fmt::Error> {
+impl Display for Ast<'_> {
+  fn fmt(&self, f: &mut Formatter) -> fmt::Result {
     let mut iter = self.items.iter().peekable();
 
     while let Some(item) = iter.next() {

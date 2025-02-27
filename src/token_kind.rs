@@ -7,6 +7,8 @@ pub(crate) enum TokenKind {
   At,
   Backtick,
   BangEquals,
+  BangTilde,
+  BarBar,
   BraceL,
   BraceR,
   BracketL,
@@ -39,7 +41,7 @@ pub(crate) enum TokenKind {
 }
 
 impl Display for TokenKind {
-  fn fmt(&self, f: &mut Formatter) -> Result<(), fmt::Error> {
+  fn fmt(&self, f: &mut Formatter) -> fmt::Result {
     use TokenKind::*;
     write!(
       f,
@@ -50,6 +52,8 @@ impl Display for TokenKind {
         At => "'@'",
         Backtick => "backtick",
         BangEquals => "'!='",
+        BangTilde => "'!~'",
+        BarBar => "'||'",
         BraceL => "'{'",
         BraceR => "'}'",
         BracketL => "'['",

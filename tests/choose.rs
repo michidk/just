@@ -81,6 +81,22 @@ fn skip_private_recipes() {
 }
 
 #[test]
+fn recipes_in_submodules_can_be_chosen() {
+  Test::new()
+    .args(["--unstable", "--choose"])
+    .env("JUST_CHOOSER", "head -n10")
+    .write("bar.just", "baz:\n echo BAZ")
+    .justfile(
+      "
+        mod bar
+      ",
+    )
+    .stderr("echo BAZ\n")
+    .stdout("BAZ\n")
+    .run();
+}
+
+#[test]
 fn skip_recipes_that_require_arguments() {
   Test::new()
     .arg("--choose")
@@ -114,7 +130,6 @@ fn no_choosable_recipes() {
     )
     .status(EXIT_FAILURE)
     .stderr("error: Justfile contains no choosable recipes.\n")
-    .stdout("")
     .run();
 }
 
@@ -168,7 +183,13 @@ fn status_error() {
     "exit-2": "#!/usr/bin/env bash\nexit 2\n",
   };
 
-  ("chmod", "+x", tmp.path().join("exit-2")).run();
+  let output = Command::new("chmod")
+    .arg("+x")
+    .arg(tmp.path().join("exit-2"))
+    .output()
+    .unwrap();
+
+  assert!(output.status.success());
 
   let path = env::join_paths(
     iter::once(tmp.path().to_owned()).chain(env::split_paths(&env::var_os("PATH").unwrap())),

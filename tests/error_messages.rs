@@ -1,42 +1,54 @@
 use super::*;
 
-test! {
-  name: invalid_alias_attribute,
-  justfile: "[private]\n[linux]\nalias t := test\n\ntest:\n",
-  stderr: "
+#[test]
+fn invalid_alias_attribute() {
+  Test::new()
+    .justfile("[private]\n[linux]\nalias t := test\n\ntest:\n")
+    .stderr(
+      "
     error: Alias `t` has invalid attribute `linux`
      ——▶ justfile:3:7
       │
     3 │ alias t := test
       │       ^
   ",
-  status: EXIT_FAILURE,
+    )
+    .status(EXIT_FAILURE)
+    .run();
 }
 
-test! {
-  name: expected_keyword,
-  justfile: "foo := if '' == '' { '' } arlo { '' }",
-  stderr: "
+#[test]
+fn expected_keyword() {
+  Test::new()
+    .justfile("foo := if '' == '' { '' } arlo { '' }")
+    .stderr(
+      "
     error: Expected keyword `else` but found identifier `arlo`
      ——▶ justfile:1:27
       │
     1 │ foo := if '' == '' { '' } arlo { '' }
       │                           ^^^^
   ",
-  status: EXIT_FAILURE,
+    )
+    .status(EXIT_FAILURE)
+    .run();
 }
 
-test! {
-  name: unexpected_character,
-  justfile: "&~",
-  stderr: "
+#[test]
+fn unexpected_character() {
+  Test::new()
+    .justfile("&~")
+    .stderr(
+      "
     error: Expected character `&`
      ——▶ justfile:1:2
       │
     1 │ &~
       │  ^
   ",
-  status: EXIT_FAILURE,
+    )
+    .status(EXIT_FAILURE)
+    .run();
 }
 
 #[test]
@@ -81,12 +93,11 @@ fn file_paths_are_relative() {
     .stderr(format!(
       "
 error: Expected '*', ':', '$', identifier, or '+', but found end of file
- ——▶ foo{}bar.just:1:4
+ ——▶ foo{MAIN_SEPARATOR}bar.just:1:4
   │
 1 │ baz
   │    ^
 ",
-      MAIN_SEPARATOR
     ))
     .run();
 }
@@ -106,6 +117,24 @@ fn file_paths_not_in_subdir_are_absolute() {
   │
 1 │ baz
   │    \^
+",
+    )
+    .run();
+}
+
+#[test]
+fn redefinition_errors_properly_swap_types() {
+  Test::new()
+    .write("foo.just", "foo:")
+    .justfile("foo:\n echo foo\n\nmod foo 'foo.just'")
+    .status(EXIT_FAILURE)
+    .stderr(
+      "
+error: Recipe `foo` defined on line 1 is redefined as a module on line 4
+ ——▶ justfile:4:5
+  │
+4 │ mod foo 'foo.just'
+  │     ^^^
 ",
     )
     .run();

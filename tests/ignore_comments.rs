@@ -51,7 +51,7 @@ fn ignore_recipe_comments_with_shell_setting() {
 }
 
 #[test]
-fn continuations_iwth_echo_comments_false() {
+fn continuations_with_echo_comments_false() {
   Test::new()
     .justfile(
       "
@@ -79,7 +79,6 @@ fn continuations_with_echo_comments_true() {
         echo something-useful
     ",
     )
-    .stdout("")
     .stderr("# comment lines can be continued echo something-useful\n")
     .run();
 }
@@ -95,5 +94,43 @@ fn dont_evaluate_comments() {
         # {{ error('foo') }}
     ",
     )
+    .run();
+}
+
+#[test]
+fn dont_analyze_comments() {
+  Test::new()
+    .justfile(
+      "
+      set ignore-comments
+
+      some_recipe:
+        # {{ bar }}
+    ",
+    )
+    .run();
+}
+
+#[test]
+fn comments_still_must_be_parsable_when_ignored() {
+  Test::new()
+    .justfile(
+      "
+        set ignore-comments
+
+        some_recipe:
+          # {{ foo bar }}
+      ",
+    )
+    .stderr(
+      "
+        error: Expected '&&', '||', '}}', '(', '+', or '/', but found identifier
+         ——▶ justfile:4:12
+          │
+        4 │   # {{ foo bar }}
+          │            ^^^
+      ",
+    )
+    .status(EXIT_FAILURE)
     .run();
 }

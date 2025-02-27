@@ -3,34 +3,49 @@ use super::*;
 #[derive(Debug, Clone)]
 pub(crate) enum Setting<'src> {
   AllowDuplicateRecipes(bool),
-  DotenvFilename(String),
+  AllowDuplicateVariables(bool),
+  DotenvFilename(StringLiteral<'src>),
   DotenvLoad(bool),
-  DotenvPath(String),
+  DotenvPath(StringLiteral<'src>),
+  DotenvRequired(bool),
   Export(bool),
   Fallback(bool),
   IgnoreComments(bool),
+  NoExitMessage(bool),
   PositionalArguments(bool),
   Quiet(bool),
-  Shell(Shell<'src>),
-  Tempdir(String),
+  ScriptInterpreter(Interpreter<'src>),
+  Shell(Interpreter<'src>),
+  Tempdir(StringLiteral<'src>),
+  Unstable(bool),
   WindowsPowerShell(bool),
-  WindowsShell(Shell<'src>),
+  WindowsShell(Interpreter<'src>),
+  WorkingDirectory(StringLiteral<'src>),
 }
 
-impl<'src> Display for Setting<'src> {
-  fn fmt(&self, f: &mut Formatter) -> Result<(), fmt::Error> {
+impl Display for Setting<'_> {
+  fn fmt(&self, f: &mut Formatter) -> fmt::Result {
     match self {
-      Setting::AllowDuplicateRecipes(value)
-      | Setting::DotenvLoad(value)
-      | Setting::Export(value)
-      | Setting::Fallback(value)
-      | Setting::IgnoreComments(value)
-      | Setting::PositionalArguments(value)
-      | Setting::Quiet(value)
-      | Setting::WindowsPowerShell(value) => write!(f, "{value}"),
-      Setting::Shell(shell) | Setting::WindowsShell(shell) => write!(f, "{shell}"),
-      Setting::DotenvFilename(value) | Setting::DotenvPath(value) | Setting::Tempdir(value) => {
-        write!(f, "{value:?}")
+      Self::AllowDuplicateRecipes(value)
+      | Self::AllowDuplicateVariables(value)
+      | Self::DotenvLoad(value)
+      | Self::DotenvRequired(value)
+      | Self::Export(value)
+      | Self::Fallback(value)
+      | Self::IgnoreComments(value)
+      | Self::NoExitMessage(value)
+      | Self::PositionalArguments(value)
+      | Self::Quiet(value)
+      | Self::Unstable(value)
+      | Self::WindowsPowerShell(value) => write!(f, "{value}"),
+      Self::ScriptInterpreter(shell) | Self::Shell(shell) | Self::WindowsShell(shell) => {
+        write!(f, "[{shell}]")
+      }
+      Self::DotenvFilename(value)
+      | Self::DotenvPath(value)
+      | Self::Tempdir(value)
+      | Self::WorkingDirectory(value) => {
+        write!(f, "{value}")
       }
     }
   }

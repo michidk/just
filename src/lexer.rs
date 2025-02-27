@@ -38,16 +38,16 @@ pub(crate) struct Lexer<'src> {
 impl<'src> Lexer<'src> {
   /// Lex `src`
   pub(crate) fn lex(path: &'src Path, src: &'src str) -> CompileResult<'src, Vec<Token<'src>>> {
-    Lexer::new(path, src).tokenize()
+    Self::new(path, src).tokenize()
   }
 
   #[cfg(test)]
   pub(crate) fn test_lex(src: &'src str) -> CompileResult<'src, Vec<Token<'src>>> {
-    Lexer::new("justfile".as_ref(), src).tokenize()
+    Self::new("justfile".as_ref(), src).tokenize()
   }
 
   /// Create a new Lexer to lex `src`
-  fn new(path: &'src Path, src: &'src str) -> Lexer<'src> {
+  fn new(path: &'src Path, src: &'src str) -> Self {
     let mut chars = src.chars();
     let next = chars.next();
 
@@ -57,7 +57,7 @@ impl<'src> Lexer<'src> {
       line: 0,
     };
 
-    Lexer {
+    Self {
       indentation: vec![""],
       tokens: Vec::new(),
       token_start: start,
@@ -231,11 +231,8 @@ impl<'src> Lexer<'src> {
     // The width of the error site to highlight depends on the kind of error:
     let length = match kind {
       UnterminatedString | UnterminatedBacktick => {
-        let kind = match StringKind::from_token_start(self.lexeme()) {
-          Some(kind) => kind,
-          None => {
-            return self.internal_error("Lexer::error: expected string or backtick token start")
-          }
+        let Some(kind) = StringKind::from_token_start(self.lexeme()) else {
+          return self.internal_error("Lexer::error: expected string or backtick token start");
         };
         kind.delimiter().len()
       }
@@ -262,7 +259,7 @@ impl<'src> Lexer<'src> {
 
   /// True if `text` could be an identifier
   pub(crate) fn is_identifier(text: &str) -> bool {
-    if !text.chars().next().map_or(false, Self::is_identifier_start) {
+    if !text.chars().next().is_some_and(Self::is_identifier_start) {
       return false;
     }
 
@@ -276,17 +273,13 @@ impl<'src> Lexer<'src> {
   }
 
   /// True if `c` can be the first character of an identifier
-  fn is_identifier_start(c: char) -> bool {
+  pub(crate) fn is_identifier_start(c: char) -> bool {
     matches!(c, 'a'..='z' | 'A'..='Z' | '_')
   }
 
   /// True if `c` can be a continuation character of an identifier
-  fn is_identifier_continue(c: char) -> bool {
-    if Self::is_identifier_start(c) {
-      return true;
-    }
-
-    matches!(c, '0'..='9' | '-')
+  pub(crate) fn is_identifier_continue(c: char) -> bool {
+    Self::is_identifier_start(c) || matches!(c, '0'..='9' | '-')
   }
 
   /// Consume the text and produce a series of tokens
@@ -482,7 +475,7 @@ impl<'src> Lexer<'src> {
     match start {
       ' ' | '\t' => self.lex_whitespace(),
       '!' if self.rest().starts_with("!include") => Err(self.error(Include)),
-      '!' => self.lex_digraph('!', '=', BangEquals),
+      '!' => self.lex_choices('!', &[('=', BangEquals), ('~', BangTilde)], None),
       '#' => self.lex_comment(),
       '$' => self.lex_single(Dollar),
       '&' => self.lex_digraph('&', '&', AmpersandAmpersand),
@@ -493,7 +486,11 @@ impl<'src> Lexer<'src> {
       ',' => self.lex_single(Comma),
       '/' => self.lex_single(Slash),
       ':' => self.lex_colon(),
-      '=' => self.lex_choices('=', &[('=', EqualsEquals), ('~', EqualsTilde)], Equals),
+      '=' => self.lex_choices(
+        '=',
+        &[('=', EqualsEquals), ('~', EqualsTilde)],
+        Some(Equals),
+      ),
       '?' => self.lex_single(QuestionMark),
       '@' => self.lex_single(At),
       '[' => self.lex_delimiter(BracketL),
@@ -503,11 +500,12 @@ impl<'src> Lexer<'src> {
       ']' => self.lex_delimiter(BracketR),
       '`' | '"' | '\'' => self.lex_string(),
       '{' => self.lex_delimiter(BraceL),
+      '|' => self.lex_digraph('|', '|', BarBar),
       '}' => self.lex_delimiter(BraceR),
       _ if Self::is_identifier_start(start) => self.lex_identifier(),
       _ => {
         self.advance()?;
-        Err(self.error(UnknownStartOfToken))
+        Err(self.error(UnknownStartOfToken { start }))
       }
     }
   }
@@ -624,7 +622,7 @@ impl<'src> Lexer<'src> {
     &mut self,
     first: char,
     choices: &[(char, TokenKind)],
-    otherwise: TokenKind,
+    otherwise: Option<TokenKind>,
   ) -> CompileResult<'src> {
     self.presume(first)?;
 
@@ -635,7 +633,24 @@ impl<'src> Lexer<'src> {
       }
     }
 
-    self.token(otherwise);
+    if let Some(token) = otherwise {
+      self.token(token);
+    } else {
+      // Emit an unspecified token to consume the current character,
+      self.token(Unspecified);
+
+      let expected = choices.iter().map(|choice| choice.0).collect();
+
+      if self.at_eof() {
+        return Err(self.error(UnexpectedEndOfToken { expected }));
+      }
+
+      // …and advance past another character,
+      self.advance()?;
+
+      // …so that the error we produce highlights the unexpected character.
+      return Err(self.error(UnexpectedCharacter { expected }));
+    }
 
     Ok(())
   }
@@ -699,14 +714,18 @@ impl<'src> Lexer<'src> {
       self.token(Unspecified);
 
       if self.at_eof() {
-        return Err(self.error(UnexpectedEndOfToken { expected: right }));
+        return Err(self.error(UnexpectedEndOfToken {
+          expected: vec![right],
+        }));
       }
 
       // …and advance past another character,
       self.advance()?;
 
       // …so that the error we produce highlights the unexpected character.
-      Err(self.error(UnexpectedCharacter { expected: right }))
+      Err(self.error(UnexpectedCharacter {
+        expected: vec![right],
+      }))
     }
   }
 
@@ -817,9 +836,7 @@ impl<'src> Lexer<'src> {
   /// Cooked string: "[^"]*" # also processes escape sequences
   /// Raw string:    '[^']*'
   fn lex_string(&mut self) -> CompileResult<'src> {
-    let kind = if let Some(kind) = StringKind::from_token_start(self.rest()) {
-      kind
-    } else {
+    let Some(kind) = StringKind::from_token_start(self.rest()) else {
       self.advance()?;
       return Err(self.internal_error("Lexer::lex_string: invalid string start"));
     };
@@ -957,6 +974,8 @@ mod tests {
       Asterisk => "*",
       At => "@",
       BangEquals => "!=",
+      BangTilde => "!~",
+      BarBar => "||",
       BraceL => "{",
       BraceR => "}",
       BracketL => "[",
@@ -1028,7 +1047,7 @@ mod tests {
             length,
             path: "justfile".as_ref(),
           },
-          kind: Box::new(kind),
+          kind: kind.into(),
         };
         assert_eq!(have, want);
       }
@@ -2102,7 +2121,7 @@ mod tests {
     line:   0,
     column: 0,
     width:  1,
-    kind:   UnknownStartOfToken,
+    kind:   UnknownStartOfToken { start: '%'},
   }
 
   error! {
@@ -2163,7 +2182,7 @@ mod tests {
     line:   0,
     column: 0,
     width:  1,
-    kind:   UnknownStartOfToken,
+    kind:   UnknownStartOfToken{ start: '-'},
   }
 
   error! {
@@ -2173,7 +2192,7 @@ mod tests {
     line:   0,
     column: 0,
     width:  1,
-    kind:   UnknownStartOfToken,
+    kind:   UnknownStartOfToken { start: '0' },
   }
 
   error! {
@@ -2243,7 +2262,7 @@ mod tests {
     line:   0,
     column: 1,
     width:  1,
-    kind:   UnknownStartOfToken,
+    kind:   UnknownStartOfToken { start: '%'},
   }
 
   error! {
@@ -2268,9 +2287,10 @@ mod tests {
     column: 1,
     width:  0,
     kind:   UnexpectedEndOfToken {
-      expected: '&',
+      expected: vec!['&'],
     },
   }
+
   error! {
     name:   ampersand_unexpected,
     input:  "&%",
@@ -2279,7 +2299,19 @@ mod tests {
     column: 1,
     width:  1,
     kind:   UnexpectedCharacter {
-      expected: '&',
+      expected: vec!['&'],
+    },
+  }
+
+  error! {
+    name:   bang_eof,
+    input:  "!",
+    offset: 1,
+    line:   0,
+    column: 1,
+    width:  0,
+    kind:   UnexpectedEndOfToken {
+      expected: vec!['=', '~'],
     },
   }
 
@@ -2301,7 +2333,7 @@ mod tests {
       }
     );
     assert_matches!(&*compile_error.kind,
-        Internal { ref message }
+        Internal { message }
         if message == "Lexer presumed character `-`"
     );
 

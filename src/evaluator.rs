@@ -1,33 +1,64 @@
 use super::*;
 
 pub(crate) struct Evaluator<'src: 'run, 'run> {
-  assignments: Option<&'run Table<'src, Assignment<'src>>>,
-  config: &'run Config,
-  dotenv: &'run BTreeMap<String, String>,
-  scope: Scope<'src, 'run>,
-  settings: &'run Settings<'run>,
-  search: &'run Search,
+  pub(crate) assignments: Option<&'run Table<'src, Assignment<'src>>>,
+  pub(crate) context: ExecutionContext<'src, 'run>,
+  pub(crate) is_dependency: bool,
+  pub(crate) scope: Scope<'src, 'run>,
 }
 
 impl<'src, 'run> Evaluator<'src, 'run> {
   pub(crate) fn evaluate_assignments(
-    assignments: &'run Table<'src, Assignment<'src>>,
     config: &'run Config,
     dotenv: &'run BTreeMap<String, String>,
-    overrides: Scope<'src, 'run>,
-    settings: &'run Settings<'run>,
+    module: &'run Justfile<'src>,
+    overrides: &BTreeMap<String, String>,
+    parent: &'run Scope<'src, 'run>,
     search: &'run Search,
-  ) -> RunResult<'src, Scope<'src, 'run>> {
-    let mut evaluator = Self {
-      scope: overrides,
-      assignments: Some(assignments),
+  ) -> RunResult<'src, Scope<'src, 'run>>
+  where
+    'src: 'run,
+  {
+    let context = ExecutionContext {
       config,
       dotenv,
-      settings,
+      module,
+      scope: parent,
       search,
     };
 
-    for assignment in assignments.values() {
+    let mut scope = context.scope.child();
+    let mut unknown_overrides = Vec::new();
+
+    for (name, value) in overrides {
+      if let Some(assignment) = module.assignments.get(name) {
+        scope.bind(Binding {
+          constant: false,
+          export: assignment.export,
+          file_depth: 0,
+          name: assignment.name,
+          private: assignment.private,
+          value: value.clone(),
+        });
+      } else {
+        unknown_overrides.push(name.clone());
+      }
+    }
+
+    if !unknown_overrides.is_empty() {
+      return Err(Error::UnknownOverrides {
+        overrides: unknown_overrides,
+      });
+    }
+
+    let mut evaluator = Self {
+      context,
+      assignments: Some(&module.assignments),
+      scope,
+      is_dependency: false,
+    };
+
+    for assignment in module.assignments.values() {
       evaluator.evaluate_assignment(assignment)?;
     }
 
@@ -39,7 +70,14 @@ impl<'src, 'run> Evaluator<'src, 'run> {
 
     if !self.scope.bound(name) {
       let value = self.evaluate_expression(&assignment.value)?;
-      self.scope.bind(assignment.export, assignment.name, value);
+      self.scope.bind(Binding {
+        constant: false,
+        export: assignment.export,
+        file_depth: 0,
+        name: assignment.name,
+        private: assignment.private,
+        value,
+      });
     }
 
     Ok(self.scope.value(name).unwrap())
@@ -50,6 +88,142 @@ impl<'src, 'run> Evaluator<'src, 'run> {
     expression: &Expression<'src>,
   ) -> RunResult<'src, String> {
     match expression {
+      Expression::And { lhs, rhs } => {
+        let lhs = self.evaluate_expression(lhs)?;
+        if lhs.is_empty() {
+          return Ok(String::new());
+        }
+        self.evaluate_expression(rhs)
+      }
+      Expression::Assert { condition, error } => {
+        if self.evaluate_condition(condition)? {
+          Ok(String::new())
+        } else {
+          Err(Error::Assert {
+            message: self.evaluate_expression(error)?,
+          })
+        }
+      }
+      Expression::Backtick { contents, token } => {
+        if self.context.config.dry_run {
+          Ok(format!("`{contents}`"))
+        } else {
+          Ok(self.run_backtick(contents, token)?)
+        }
+      }
+      Expression::Call { thunk } => {
+        use Thunk::*;
+        let result = match thunk {
+          Nullary { function, .. } => function(function::Context::new(self, thunk.name())),
+          Unary { function, arg, .. } => {
+            let arg = self.evaluate_expression(arg)?;
+            function(function::Context::new(self, thunk.name()), &arg)
+          }
+          UnaryOpt {
+            function,
+            args: (a, b),
+            ..
+          } => {
+            let a = self.evaluate_expression(a)?;
+            let b = match b.as_ref() {
+              Some(b) => Some(self.evaluate_expression(b)?),
+              None => None,
+            };
+            function(function::Context::new(self, thunk.name()), &a, b.as_deref())
+          }
+          UnaryPlus {
+            function,
+            args: (a, rest),
+            ..
+          } => {
+            let a = self.evaluate_expression(a)?;
+            let mut rest_evaluated = Vec::new();
+            for arg in rest {
+              rest_evaluated.push(self.evaluate_expression(arg)?);
+            }
+            function(
+              function::Context::new(self, thunk.name()),
+              &a,
+              &rest_evaluated,
+            )
+          }
+          Binary {
+            function,
+            args: [a, b],
+            ..
+          } => {
+            let a = self.evaluate_expression(a)?;
+            let b = self.evaluate_expression(b)?;
+            function(function::Context::new(self, thunk.name()), &a, &b)
+          }
+          BinaryPlus {
+            function,
+            args: ([a, b], rest),
+            ..
+          } => {
+            let a = self.evaluate_expression(a)?;
+            let b = self.evaluate_expression(b)?;
+            let mut rest_evaluated = Vec::new();
+            for arg in rest {
+              rest_evaluated.push(self.evaluate_expression(arg)?);
+            }
+            function(
+              function::Context::new(self, thunk.name()),
+              &a,
+              &b,
+              &rest_evaluated,
+            )
+          }
+          Ternary {
+            function,
+            args: [a, b, c],
+            ..
+          } => {
+            let a = self.evaluate_expression(a)?;
+            let b = self.evaluate_expression(b)?;
+            let c = self.evaluate_expression(c)?;
+            function(function::Context::new(self, thunk.name()), &a, &b, &c)
+          }
+        };
+        result.map_err(|message| Error::FunctionCall {
+          function: thunk.name(),
+          message,
+        })
+      }
+      Expression::Concatenation { lhs, rhs } => {
+        let lhs = self.evaluate_expression(lhs)?;
+        let rhs = self.evaluate_expression(rhs)?;
+        Ok(lhs + &rhs)
+      }
+      Expression::Conditional {
+        condition,
+        then,
+        otherwise,
+      } => {
+        if self.evaluate_condition(condition)? {
+          self.evaluate_expression(then)
+        } else {
+          self.evaluate_expression(otherwise)
+        }
+      }
+      Expression::Group { contents } => self.evaluate_expression(contents),
+      Expression::Join { lhs: None, rhs } => Ok("/".to_string() + &self.evaluate_expression(rhs)?),
+      Expression::Join {
+        lhs: Some(lhs),
+        rhs,
+      } => {
+        let lhs = self.evaluate_expression(lhs)?;
+        let rhs = self.evaluate_expression(rhs)?;
+        Ok(lhs + "/" + &rhs)
+      }
+      Expression::Or { lhs, rhs } => {
+        let lhs = self.evaluate_expression(lhs)?;
+        if !lhs.is_empty() {
+          return Ok(lhs);
+        }
+        self.evaluate_expression(rhs)
+      }
+      Expression::StringLiteral { string_literal } => Ok(string_literal.cooked.clone()),
       Expression::Variable { name, .. } => {
         let variable = name.lexeme();
         if let Some(value) = self.scope.value(variable) {
@@ -65,165 +239,56 @@ impl<'src, 'run> Evaluator<'src, 'run> {
           })
         }
       }
-      Expression::Call { thunk } => {
-        use Thunk::*;
-
-        let context = FunctionContext {
-          dotenv: self.dotenv,
-          invocation_directory: &self.config.invocation_directory,
-          search: self.search,
-        };
-
-        match thunk {
-          Nullary { name, function, .. } => {
-            function(&context).map_err(|message| Error::FunctionCall {
-              function: *name,
-              message,
-            })
-          }
-          Unary {
-            name,
-            function,
-            arg,
-            ..
-          } => function(&context, &self.evaluate_expression(arg)?).map_err(|message| {
-            Error::FunctionCall {
-              function: *name,
-              message,
-            }
-          }),
-          UnaryOpt {
-            name,
-            function,
-            args: (a, b),
-            ..
-          } => {
-            let a = self.evaluate_expression(a)?;
-            let b = match b.as_ref() {
-              Some(b) => Some(self.evaluate_expression(b)?),
-              None => None,
-            };
-
-            function(&context, &a, b.as_deref()).map_err(|message| Error::FunctionCall {
-              function: *name,
-              message,
-            })
-          }
-          Binary {
-            name,
-            function,
-            args: [a, b],
-            ..
-          } => function(
-            &context,
-            &self.evaluate_expression(a)?,
-            &self.evaluate_expression(b)?,
-          )
-          .map_err(|message| Error::FunctionCall {
-            function: *name,
-            message,
-          }),
-          BinaryPlus {
-            name,
-            function,
-            args: ([a, b], rest),
-            ..
-          } => {
-            let a = self.evaluate_expression(a)?;
-            let b = self.evaluate_expression(b)?;
-
-            let mut rest_evaluated = Vec::new();
-            for arg in rest {
-              rest_evaluated.push(self.evaluate_expression(arg)?);
-            }
-
-            function(&context, &a, &b, &rest_evaluated).map_err(|message| Error::FunctionCall {
-              function: *name,
-              message,
-            })
-          }
-          Ternary {
-            name,
-            function,
-            args: [a, b, c],
-            ..
-          } => function(
-            &context,
-            &self.evaluate_expression(a)?,
-            &self.evaluate_expression(b)?,
-            &self.evaluate_expression(c)?,
-          )
-          .map_err(|message| Error::FunctionCall {
-            function: *name,
-            message,
-          }),
-        }
-      }
-      Expression::StringLiteral { string_literal } => Ok(string_literal.cooked.clone()),
-      Expression::Backtick { contents, token } => {
-        if self.config.dry_run {
-          Ok(format!("`{contents}`"))
-        } else {
-          Ok(self.run_backtick(contents, token)?)
-        }
-      }
-      Expression::Concatenation { lhs, rhs } => {
-        Ok(self.evaluate_expression(lhs)? + &self.evaluate_expression(rhs)?)
-      }
-      Expression::Conditional {
-        lhs,
-        rhs,
-        then,
-        otherwise,
-        operator,
-      } => {
-        let lhs_value = self.evaluate_expression(lhs)?;
-        let rhs_value = self.evaluate_expression(rhs)?;
-        let condition = match operator {
-          ConditionalOperator::Equality => lhs_value == rhs_value,
-          ConditionalOperator::Inequality => lhs_value != rhs_value,
-          ConditionalOperator::RegexMatch => Regex::new(&rhs_value)
-            .map_err(|source| Error::RegexCompile { source })?
-            .is_match(&lhs_value),
-        };
-        if condition {
-          self.evaluate_expression(then)
-        } else {
-          self.evaluate_expression(otherwise)
-        }
-      }
-      Expression::Group { contents } => self.evaluate_expression(contents),
-      Expression::Join { lhs: None, rhs } => Ok("/".to_string() + &self.evaluate_expression(rhs)?),
-      Expression::Join {
-        lhs: Some(lhs),
-        rhs,
-      } => Ok(self.evaluate_expression(lhs)? + "/" + &self.evaluate_expression(rhs)?),
     }
   }
 
+  fn evaluate_condition(&mut self, condition: &Condition<'src>) -> RunResult<'src, bool> {
+    let lhs_value = self.evaluate_expression(&condition.lhs)?;
+    let rhs_value = self.evaluate_expression(&condition.rhs)?;
+    let condition = match condition.operator {
+      ConditionalOperator::Equality => lhs_value == rhs_value,
+      ConditionalOperator::Inequality => lhs_value != rhs_value,
+      ConditionalOperator::RegexMatch => Regex::new(&rhs_value)
+        .map_err(|source| Error::RegexCompile { source })?
+        .is_match(&lhs_value),
+      ConditionalOperator::RegexMismatch => !Regex::new(&rhs_value)
+        .map_err(|source| Error::RegexCompile { source })?
+        .is_match(&lhs_value),
+    };
+    Ok(condition)
+  }
+
   fn run_backtick(&self, raw: &str, token: &Token<'src>) -> RunResult<'src, String> {
-    let mut cmd = self.settings.shell_command(self.config);
+    self
+      .run_command(raw, &[])
+      .map_err(|output_error| Error::Backtick {
+        token: *token,
+        output_error,
+      })
+  }
 
-    cmd.arg(raw);
-
-    cmd.current_dir(&self.search.working_directory);
-
-    cmd.export(self.settings, self.dotenv, &self.scope);
-
+  pub(crate) fn run_command(&self, command: &str, args: &[&str]) -> Result<String, OutputError> {
+    let mut cmd = self
+      .context
+      .module
+      .settings
+      .shell_command(self.context.config);
+    cmd.arg(command);
+    cmd.args(args);
+    cmd.current_dir(self.context.working_directory());
+    cmd.export(
+      &self.context.module.settings,
+      self.context.dotenv,
+      &self.scope,
+      &self.context.module.unexports,
+    );
     cmd.stdin(Stdio::inherit());
-
-    cmd.stderr(if self.config.verbosity.quiet() {
+    cmd.stderr(if self.context.config.verbosity.quiet() {
       Stdio::null()
     } else {
       Stdio::inherit()
     });
-
-    InterruptHandler::guard(|| {
-      output(cmd).map_err(|output_error| Error::Backtick {
-        token: *token,
-        output_error,
-      })
-    })
+    InterruptHandler::guard(|| output(cmd))
   }
 
   pub(crate) fn evaluate_line(
@@ -252,24 +317,12 @@ impl<'src, 'run> Evaluator<'src, 'run> {
   }
 
   pub(crate) fn evaluate_parameters(
-    config: &'run Config,
-    dotenv: &'run BTreeMap<String, String>,
-    parameters: &[Parameter<'src>],
+    context: &ExecutionContext<'src, 'run>,
+    is_dependency: bool,
     arguments: &[String],
-    scope: &'run Scope<'src, 'run>,
-    settings: &'run Settings,
-    search: &'run Search,
+    parameters: &[Parameter<'src>],
   ) -> RunResult<'src, (Scope<'src, 'run>, Vec<String>)> {
-    let mut evaluator = Self {
-      assignments: None,
-      scope: scope.child(),
-      search,
-      settings,
-      dotenv,
-      config,
-    };
-
-    let mut scope = scope.child();
+    let mut evaluator = Self::new(context, is_dependency, context.scope);
 
     let mut positional = Vec::new();
 
@@ -300,26 +353,29 @@ impl<'src, 'run> Evaluator<'src, 'run> {
         rest = &rest[1..];
         value
       };
-      scope.bind(parameter.export, parameter.name, value);
+      evaluator.scope.bind(Binding {
+        constant: false,
+        export: parameter.export,
+        file_depth: 0,
+        name: parameter.name,
+        private: false,
+        value,
+      });
     }
 
-    Ok((scope, positional))
+    Ok((evaluator.scope, positional))
   }
 
-  pub(crate) fn recipe_evaluator(
-    config: &'run Config,
-    dotenv: &'run BTreeMap<String, String>,
+  pub(crate) fn new(
+    context: &ExecutionContext<'src, 'run>,
+    is_dependency: bool,
     scope: &'run Scope<'src, 'run>,
-    settings: &'run Settings,
-    search: &'run Search,
-  ) -> Evaluator<'src, 'run> {
+  ) -> Self {
     Self {
       assignments: None,
-      scope: Scope::child(scope),
-      search,
-      settings,
-      dotenv,
-      config,
+      context: *context,
+      is_dependency,
+      scope: scope.child(),
     }
   }
 }

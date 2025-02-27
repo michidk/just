@@ -6,8 +6,8 @@ pub(crate) struct UnresolvedDependency<'src> {
   pub(crate) arguments: Vec<Expression<'src>>,
 }
 
-impl<'src> Display for UnresolvedDependency<'src> {
-  fn fmt(&self, f: &mut Formatter) -> Result<(), fmt::Error> {
+impl Display for UnresolvedDependency<'_> {
+  fn fmt(&self, f: &mut Formatter) -> fmt::Result {
     if self.arguments.is_empty() {
       write!(f, "{}", self.recipe)
     } else {

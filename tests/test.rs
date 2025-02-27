@@ -1,38 +1,7 @@
-use {super::*, pretty_assertions::assert_eq};
-
-macro_rules! test {
-  {
-    name: $name:ident,
-    $(justfile: $justfile:expr,)?
-    $(args: ($($arg:tt),*),)?
-    $(env: { $($env_key:literal : $env_value:literal,)* },)?
-    $(stdin: $stdin:expr,)?
-    $(stdout: $stdout:expr,)?
-    $(stdout_regex: $stdout_regex:expr,)?
-    $(stderr: $stderr:expr,)?
-    $(stderr_regex: $stderr_regex:expr,)?
-    $(status: $status:expr,)?
-    $(shell: $shell:expr,)?
-  } => {
-    #[test]
-    fn $name() {
-      let test = crate::test::Test::new();
-
-      $($(let test = test.arg($arg);)*)?
-      $($(let test = test.env($env_key, $env_value);)*)?
-      $(let test = test.justfile($justfile);)?
-      $(let test = test.shell($shell);)?
-      $(let test = test.status($status);)?
-      $(let test = test.stderr($stderr);)?
-      $(let test = test.stderr_regex($stderr_regex);)?
-      $(let test = test.stdin($stdin);)?
-      $(let test = test.stdout($stdout);)?
-      $(let test = test.stdout_regex($stdout_regex);)?
-
-      test.run();
-    }
-  }
-}
+use {
+  super::*,
+  pretty_assertions::{assert_eq, StrComparison},
+};
 
 pub(crate) struct Output {
   pub(crate) pid: u32,
@@ -45,7 +14,9 @@ pub(crate) struct Test {
   pub(crate) args: Vec<String>,
   pub(crate) current_dir: PathBuf,
   pub(crate) env: BTreeMap<String, String>,
+  pub(crate) expected_files: BTreeMap<PathBuf, Vec<u8>>,
   pub(crate) justfile: Option<String>,
+  pub(crate) response: Option<Response>,
   pub(crate) shell: bool,
   pub(crate) status: i32,
   pub(crate) stderr: String,
@@ -68,7 +39,9 @@ impl Test {
       args: Vec::new(),
       current_dir: PathBuf::new(),
       env: BTreeMap::new(),
+      expected_files: BTreeMap::new(),
       justfile: Some(String::new()),
+      response: None,
       shell: true,
       status: EXIT_SUCCESS,
       stderr: String::new(),
@@ -94,8 +67,13 @@ impl Test {
     self
   }
 
+  pub(crate) fn create_dir(self, path: impl AsRef<Path>) -> Self {
+    fs::create_dir_all(self.tempdir.path().join(path)).unwrap();
+    self
+  }
+
   pub(crate) fn current_dir(mut self, path: impl AsRef<Path>) -> Self {
-    self.current_dir = path.as_ref().to_owned();
+    path.as_ref().clone_into(&mut self.current_dir);
     self
   }
 
@@ -129,6 +107,11 @@ impl Test {
     self
   }
 
+  pub(crate) fn response(mut self, response: Response) -> Self {
+    self.response = Some(response);
+    self.stdout_regex(".*")
+  }
+
   pub(crate) fn shell(mut self, shell: bool) -> Self {
     self.shell = shell;
     self
@@ -145,7 +128,7 @@ impl Test {
   }
 
   pub(crate) fn stderr_regex(mut self, stderr_regex: impl AsRef<str>) -> Self {
-    self.stderr_regex = Some(Regex::new(&format!("^{}$", stderr_regex.as_ref())).unwrap());
+    self.stderr_regex = Some(Regex::new(&format!("^(?s){}$", stderr_regex.as_ref())).unwrap());
     self
   }
 
@@ -160,10 +143,11 @@ impl Test {
   }
 
   pub(crate) fn stdout_regex(mut self, stdout_regex: impl AsRef<str>) -> Self {
-    self.stdout_regex = Some(Regex::new(&format!("^{}$", stdout_regex.as_ref())).unwrap());
+    self.stdout_regex = Some(Regex::new(&format!("(?s)^{}$", stdout_regex.as_ref())).unwrap());
     self
   }
 
+  #[allow(unused)]
   pub(crate) fn test_round_trip(mut self, test_round_trip: bool) -> Self {
     self.test_round_trip = test_round_trip;
     self
@@ -186,10 +170,59 @@ impl Test {
     fs::write(path, content).unwrap();
     self
   }
+
+  pub(crate) fn make_executable(self, path: impl AsRef<Path>) -> Self {
+    let file = self.tempdir.path().join(path);
+
+    // Make sure it exists first, as a sanity check.
+    assert!(file.exists(), "file does not exist: {}", file.display());
+
+    // Windows uses file extensions to determine whether a file is executable.
+    // Other systems don't care. To keep these tests cross-platform, just make
+    // sure all executables end with ".exe" suffix.
+    assert!(
+      file.extension() == Some("exe".as_ref()),
+      "executable file does not end with .exe: {}",
+      file.display()
+    );
+
+    #[cfg(unix)]
+    {
+      let perms = std::os::unix::fs::PermissionsExt::from_mode(0o755);
+      fs::set_permissions(file, perms).unwrap();
+    }
+
+    self
+  }
+
+  pub(crate) fn expect_file(mut self, path: impl AsRef<Path>, content: impl AsRef<[u8]>) -> Self {
+    let path = path.as_ref();
+    self
+      .expected_files
+      .insert(path.into(), content.as_ref().into());
+    self
+  }
 }
 
 impl Test {
+  #[track_caller]
   pub(crate) fn run(self) -> Output {
+    fn compare<T: PartialEq + Debug>(name: &str, have: T, want: T) -> bool {
+      let equal = have == want;
+      if !equal {
+        eprintln!("Bad {name}: {}", Comparison::new(&have, &want));
+      }
+      equal
+    }
+
+    fn compare_string(name: &str, have: &str, want: &str) -> bool {
+      let equal = have == want;
+      if !equal {
+        eprintln!("Bad {name}: {}", StrComparison::new(&have, &want));
+      }
+      equal
+    }
+
     if let Some(justfile) = &self.justfile {
       let justfile = unindent(justfile);
       fs::write(self.justfile_path(), justfile).unwrap();
@@ -198,13 +231,10 @@ impl Test {
     let stdout = if self.unindent_stdout {
       unindent(&self.stdout)
     } else {
-      self.stdout
+      self.stdout.clone()
     };
-    let stderr = unindent(&self.stderr);
 
-    let mut dotenv_path = self.tempdir.path().to_path_buf();
-    dotenv_path.push(".env");
-    fs::write(dotenv_path, "DOTENV_KEY=dotenv-value").unwrap();
+    let stderr = unindent(&self.stderr);
 
     let mut command = Command::new(executable_path("just"));
 
@@ -213,9 +243,9 @@ impl Test {
     }
 
     let mut child = command
-      .args(self.args)
+      .args(&self.args)
       .envs(&self.env)
-      .current_dir(self.tempdir.path().join(self.current_dir))
+      .current_dir(self.tempdir.path().join(&self.current_dir))
       .stdin(Stdio::piped())
       .stdout(Stdio::piped())
       .stderr(Stdio::piped())
@@ -236,38 +266,51 @@ impl Test {
       .wait_with_output()
       .expect("failed to wait for just process");
 
-    fn compare<T: PartialEq + Debug>(name: &str, have: T, want: T) -> bool {
-      let equal = have == want;
-      if !equal {
-        eprintln!("Bad {name}: {}", Comparison::new(&have, &want));
-      }
-      equal
-    }
-
     let output_stdout = str::from_utf8(&output.stdout).unwrap();
     let output_stderr = str::from_utf8(&output.stderr).unwrap();
 
     if let Some(ref stdout_regex) = self.stdout_regex {
-      if !stdout_regex.is_match(output_stdout) {
-        panic!("Stdout regex mismatch:\n{output_stdout:?}\n!~=\n/{stdout_regex:?}/");
-      }
+      assert!(
+        stdout_regex.is_match(output_stdout),
+        "Stdout regex mismatch:\n{output_stdout:?}\n!~=\n/{stdout_regex:?}/",
+      );
     }
 
     if let Some(ref stderr_regex) = self.stderr_regex {
-      if !stderr_regex.is_match(output_stderr) {
-        panic!("Stderr regex mismatch:\n{output_stderr:?}\n!~=\n/{stderr_regex:?}/");
-      }
+      assert!(
+        stderr_regex.is_match(output_stderr),
+        "Stderr regex mismatch:\n{output_stderr:?}\n!~=\n/{stderr_regex:?}/",
+      );
     }
 
-    if !compare("status", output.status.code().unwrap(), self.status)
-      | (self.stdout_regex.is_none() && !compare("stdout", output_stdout, &stdout))
-      | (self.stderr_regex.is_none() && !compare("stderr", output_stderr, &stderr))
+    if !compare("status", output.status.code(), Some(self.status))
+      | (self.stdout_regex.is_none() && !compare_string("stdout", output_stdout, &stdout))
+      | (self.stderr_regex.is_none() && !compare_string("stderr", output_stderr, &stderr))
     {
       panic!("Output mismatch.");
     }
 
+    if let Some(ref response) = self.response {
+      assert_eq!(
+        &serde_json::from_str::<Response>(output_stdout)
+          .expect("failed to deserialize stdout as response"),
+        response,
+        "response mismatch"
+      );
+    }
+
+    for (path, expected) in &self.expected_files {
+      let actual = fs::read(self.tempdir.path().join(path)).unwrap();
+      assert_eq!(
+        actual,
+        expected.as_slice(),
+        "mismatch for expected file at path {}",
+        path.display(),
+      );
+    }
+
     if self.test_round_trip && self.status == EXIT_SUCCESS {
-      test_round_trip(self.tempdir.path());
+      self.round_trip();
     }
 
     Output {
@@ -276,40 +319,52 @@ impl Test {
       tempdir: self.tempdir,
     }
   }
+
+  fn round_trip(&self) {
+    println!("Reparsing...");
+
+    let output = Command::new(executable_path("just"))
+      .current_dir(self.tempdir.path())
+      .arg("--dump")
+      .envs(&self.env)
+      .output()
+      .expect("just invocation failed");
+
+    assert!(
+      output.status.success(),
+      "dump failed: {} {:?}",
+      output.status,
+      output,
+    );
+
+    let dumped = String::from_utf8(output.stdout).unwrap();
+
+    let reparsed_path = self.tempdir.path().join("reparsed.just");
+
+    fs::write(&reparsed_path, &dumped).unwrap();
+
+    let output = Command::new(executable_path("just"))
+      .current_dir(self.tempdir.path())
+      .arg("--justfile")
+      .arg(&reparsed_path)
+      .arg("--dump")
+      .envs(&self.env)
+      .output()
+      .expect("just invocation failed");
+
+    assert!(output.status.success(), "reparse failed: {}", output.status);
+
+    let reparsed = String::from_utf8(output.stdout).unwrap();
+
+    assert_eq!(reparsed, dumped, "reparse mismatch");
+  }
 }
 
-fn test_round_trip(tmpdir: &Path) {
-  println!("Reparsing...");
-
-  let output = Command::new(executable_path("just"))
-    .current_dir(tmpdir)
-    .arg("--dump")
-    .output()
-    .expect("just invocation failed");
-
-  if !output.status.success() {
-    panic!("dump failed: {}", output.status);
-  }
-
-  let dumped = String::from_utf8(output.stdout).unwrap();
-
-  let reparsed_path = tmpdir.join("reparsed.just");
-
-  fs::write(&reparsed_path, &dumped).unwrap();
-
-  let output = Command::new(executable_path("just"))
-    .current_dir(tmpdir)
-    .arg("--justfile")
-    .arg(&reparsed_path)
-    .arg("--dump")
-    .output()
-    .expect("just invocation failed");
-
-  if !output.status.success() {
-    panic!("reparse failed: {}", output.status);
-  }
-
-  let reparsed = String::from_utf8(output.stdout).unwrap();
-
-  assert_eq!(reparsed, dumped, "reparse mismatch");
+pub fn assert_eval_eq(expression: &str, result: &str) {
+  Test::new()
+    .justfile(format!("x := {expression}"))
+    .args(["--evaluate", "x"])
+    .stdout(result)
+    .unindent_stdout(false)
+    .run();
 }

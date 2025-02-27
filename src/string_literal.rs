@@ -2,13 +2,32 @@ use super::*;
 
 #[derive(PartialEq, Debug, Clone, Ord, Eq, PartialOrd)]
 pub(crate) struct StringLiteral<'src> {
+  pub(crate) cooked: String,
+  pub(crate) expand: bool,
   pub(crate) kind: StringKind,
   pub(crate) raw: &'src str,
-  pub(crate) cooked: String,
+}
+
+impl<'src> StringLiteral<'src> {
+  pub(crate) fn from_raw(raw: &'src str) -> Self {
+    Self {
+      cooked: raw.into(),
+      expand: false,
+      kind: StringKind {
+        delimiter: StringDelimiter::QuoteSingle,
+        indented: false,
+      },
+      raw,
+    }
+  }
 }
 
 impl Display for StringLiteral<'_> {
   fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+    if self.expand {
+      write!(f, "x")?;
+    }
+
     write!(
       f,
       "{}{}{}",
@@ -19,7 +38,7 @@ impl Display for StringLiteral<'_> {
   }
 }
 
-impl<'src> Serialize for StringLiteral<'src> {
+impl Serialize for StringLiteral<'_> {
   fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
   where
     S: Serializer,
