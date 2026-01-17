@@ -1,76 +1,86 @@
 use super::*;
 
-#[cfg(windows)]
 #[test]
 fn powershell() {
+  if cfg!(not(windows)) {
+    return;
+  }
   Test::new()
     .justfile(
-      r#"
+      r"
 default:
   #!powershell
   Write-Host Hello-World
-"#,
+",
     )
     .stdout("Hello-World\n")
     .success();
 }
 
-#[cfg(windows)]
 #[test]
 fn powershell_exe() {
+  if cfg!(not(windows)) {
+    return;
+  }
   Test::new()
     .justfile(
-      r#"
+      r"
 default:
   #!powershell.exe
    Write-Host Hello-World
-"#,
+",
     )
     .stdout("Hello-World\n")
     .success();
 }
 
-#[cfg(windows)]
 #[test]
 fn cmd() {
+  if cfg!(not(windows)) {
+    return;
+  }
   Test::new()
     .justfile(
-      r#"
+      r"
 default:
   #!cmd /c
   @echo Hello-World
-"#,
+",
     )
     .stdout("Hello-World\r\n")
     .success();
 }
 
-#[cfg(windows)]
 #[test]
 fn cmd_exe() {
+  if cfg!(not(windows)) {
+    return;
+  }
   Test::new()
     .justfile(
-      r#"
+      r"
 default:
   #!cmd.exe /c
   @echo Hello-World
-"#,
+",
     )
     .stdout("Hello-World\r\n")
     .success();
 }
 
-#[cfg(windows)]
 #[test]
 fn multi_line_cmd_shebangs_are_removed() {
+  if cfg!(not(windows)) {
+    return;
+  }
   Test::new()
     .justfile(
-      r#"
+      r"
 default:
   #!cmd.exe /c
   #!foo
   @echo Hello-World
-"#,
+",
     )
     .stdout("Hello-World\r\n")
     .success();
